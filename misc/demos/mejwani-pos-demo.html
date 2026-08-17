@@ -1,0 +1,720 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hotel Mejwani — Offline-First Order Flow</title>
+<style>
+  :root{
+    --bg:#101113;
+    --panel:#1D1F22;
+    --panel-alt:#25272B;
+    --amber:#E9A23B;
+    --amber-dim:#7A5A24;
+    --green:#4FA97A;
+    --rust:#D1573D;
+    --blue:#5B8DBE;
+    --text:#F2EEE5;
+    --muted:#9B968C;
+    --hairline:#34363A;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", system-ui, sans-serif;
+    --phone-bg:#1B1C1F;
+    --kitchen-bg:#191A1D;
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(ellipse 1000px 560px at 20% -8%, #202226 0%, transparent 62%),
+      radial-gradient(ellipse 700px 420px at 88% 10%, #1b1a17 0%, transparent 55%),
+      var(--bg);
+    color:var(--text);
+    font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;
+  }
+  ::selection{ background:var(--amber); color:#241a05; }
+  button{font-family:inherit;}
+  :focus-visible{ outline:2px solid var(--amber); outline-offset:2px; border-radius:6px; }
+
+  .app{max-width:1180px;margin:0 auto;padding:30px 20px 70px;}
+
+  /* ---------- header ---------- */
+  .masthead{display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-bottom:22px;}
+  .brand{display:flex;align-items:center;gap:13px;}
+  .brand-mark{
+    width:42px;height:42px;border-radius:11px;flex:none;
+    background:linear-gradient(155deg, var(--amber), #b9791f);
+    color:#1b1400;font-weight:900;font-family:var(--mono);
+    display:flex;align-items:center;justify-content:center;font-size:14px;
+  }
+  .brand-name{font-weight:800;font-size:19px;letter-spacing:0.2px;}
+  .brand-sub{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1.4px;margin-top:2px;}
+  .eyebrow{
+    font-family:var(--mono);font-size:11px;color:var(--amber);
+    text-transform:uppercase;letter-spacing:1.6px;margin:0 0 4px;
+  }
+
+  /* ---------- controls strip ---------- */
+  .controls{
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    background:var(--panel);border:1px solid var(--hairline);
+    border-radius:12px;padding:12px 14px;margin-bottom:16px;
+  }
+  .controls-label{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-right:2px;}
+  .status-pill{
+    display:flex;align-items:center;gap:7px;
+    background:var(--panel-alt);border:1px solid var(--hairline);
+    padding:6px 12px;border-radius:100px;font-size:12px;color:var(--muted);
+  }
+  .status-pill strong{color:var(--text);font-weight:700;}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none;}
+  .dot-green{background:var(--green);animation:pulseGreen 2s infinite;}
+  .dot-rust{background:var(--rust);animation:pulseRust 1s infinite;}
+  @keyframes pulseGreen{0%{box-shadow:0 0 0 0 rgba(79,169,122,.55);}70%{box-shadow:0 0 0 6px rgba(79,169,122,0);}100%{box-shadow:0 0 0 0 rgba(79,169,122,0);}}
+  @keyframes pulseRust{0%{opacity:1;}50%{opacity:.35;}100%{opacity:1;}}
+
+  .outage-btn{
+    margin-left:auto;
+    background:var(--panel-alt);color:var(--text);
+    border:1px solid var(--hairline);border-radius:8px;
+    padding:8px 14px;font-size:12.5px;font-weight:600;cursor:pointer;
+    transition:border-color .15s ease, background .15s ease;
+  }
+  .outage-btn:hover{border-color:var(--amber);}
+  .outage-btn.is-down{background:var(--rust);border-color:var(--rust);color:#241009;}
+
+  .device-toggle{display:none;gap:4px;background:var(--panel-alt);border:1px solid var(--hairline);border-radius:9px;padding:3px;}
+  .device-toggle button{
+    border:none;background:transparent;color:var(--muted);font-size:12px;font-weight:700;
+    padding:7px 13px;border-radius:6px;cursor:pointer;
+  }
+  .device-toggle button.active{background:var(--amber);color:#241a05;}
+  @media (max-width:899px){ .device-toggle{display:flex;} .outage-btn{margin-left:0;} }
+
+  .explainer{color:var(--muted);font-size:12.5px;line-height:1.55;max-width:760px;margin:0 0 30px;}
+  .explainer strong{color:var(--text);}
+
+  /* ---------- stage ---------- */
+  .stage{
+    position:relative;
+    display:flex;justify-content:center;align-items:flex-start;flex-wrap:wrap;
+    gap:56px;padding:36px 10px 10px;
+  }
+  .stage::before{
+    content:"";position:absolute;left:8%;right:8%;bottom:18px;height:110px;
+    background:radial-gradient(ellipse at center, rgba(0,0,0,0.55), transparent 72%);
+    filter:blur(8px);z-index:0;pointer-events:none;
+  }
+  .device-frame{position:relative;z-index:1;transition:opacity .15s ease;}
+  .device-frame.inactive{display:none;}
+  @media (min-width:900px){ .device-frame.inactive{display:block;} }
+  .device-label{
+    text-align:center;font-family:var(--mono);font-size:10.5px;color:var(--muted);
+    text-transform:uppercase;letter-spacing:1.4px;margin-bottom:12px;
+  }
+
+  .signal-dot{
+    position:absolute;width:10px;height:10px;border-radius:50%;
+    background:var(--amber);box-shadow:0 0 16px 5px rgba(233,162,59,.65);
+    pointer-events:none;z-index:50;top:0;left:0;
+  }
+
+  /* ---------- phone frame ---------- */
+  .phone-frame{
+    width:clamp(252px,80vw,300px);
+    border-radius:44px;
+    background:linear-gradient(160deg,#333438,#0a0a0b 62%);
+    padding:12px;
+    box-shadow:0 34px 60px -22px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.05) inset;
+  }
+  .phone-notch{
+    width:86px;height:20px;background:#0a0a0b;border-radius:0 0 13px 13px;
+    position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:6;
+  }
+  .phone-screen{
+    background:var(--phone-bg);border-radius:32px;overflow:hidden;
+    position:relative;height:600px;display:flex;flex-direction:column;
+  }
+  .phone-statusbar{
+    display:flex;justify-content:space-between;align-items:center;
+    padding:12px 20px 2px;font-family:var(--mono);font-size:11px;color:var(--text);flex:none;
+  }
+  .phone-statusbar .net-indicators{display:flex;gap:8px;}
+  .phone-statusbar .net-indicators span{display:flex;align-items:center;gap:4px;color:var(--muted);}
+  .phone-statusbar .mini-dot{width:6px;height:6px;border-radius:50%;}
+
+  .phone-appbar{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:10px 18px 12px;border-bottom:1px solid var(--hairline);flex:none;
+  }
+  .phone-appbar-title{font-weight:800;font-size:14.5px;}
+  .phone-appbar-sub{font-size:10.5px;color:var(--muted);margin-top:1px;}
+  .avatar{
+    width:28px;height:28px;border-radius:50%;background:var(--amber);color:#241a05;
+    display:flex;align-items:center;justify-content:center;font-weight:800;font-size:11.5px;flex:none;
+  }
+
+  .phone-body{flex:1;overflow-y:auto;padding:14px 18px 18px;}
+  .phone-body::-webkit-scrollbar{width:0;}
+
+  .section-label{font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin:0 0 9px;}
+  .section-label.spaced{margin-top:18px;}
+
+  .tables{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;}
+  .table-btn{
+    position:relative;background:var(--panel-alt);border:1px solid var(--hairline);
+    border-radius:10px;padding:10px 4px 8px;text-align:center;cursor:pointer;
+    color:var(--text);font-family:var(--mono);font-size:12.5px;font-weight:700;
+    transition:transform .1s ease, border-color .15s ease;
+  }
+  .table-btn:active{transform:scale(.96);}
+  .table-btn.selected{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber) inset;}
+  .table-status-dot{position:absolute;top:6px;right:6px;width:6px;height:6px;border-radius:50%;}
+  .status-available .table-status-dot{background:var(--green);}
+  .status-occupied .table-status-dot{background:var(--rust);}
+  .status-kot .table-status-dot{background:var(--amber);}
+  .status-ready .table-status-dot{background:var(--blue);}
+  .table-status-label{display:block;font-family:var(--sans);font-size:8.5px;color:var(--muted);margin-top:3px;text-transform:uppercase;letter-spacing:.4px;}
+
+  .menu-list{display:flex;flex-direction:column;gap:6px;}
+  .menu-item{
+    display:flex;align-items:center;justify-content:space-between;
+    background:var(--panel-alt);border:1px solid var(--hairline);
+    border-radius:10px;padding:9px 10px;
+  }
+  .menu-item-name{font-size:12.5px;}
+  .menu-item-price{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:2px;}
+  .qty-stepper{display:flex;align-items:center;gap:8px;}
+  .qty-btn{
+    width:24px;height:24px;border-radius:7px;border:1px solid var(--hairline);
+    background:var(--panel);color:var(--text);font-weight:800;font-size:14px;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;
+  }
+  .qty-btn.plus{background:var(--amber);color:#241a05;border-color:var(--amber);}
+  .qty-val{font-family:var(--mono);font-size:12.5px;min-width:14px;text-align:center;}
+
+  .phone-orderbar{
+    flex:none;position:relative;z-index:2;
+    border-top:1px solid var(--hairline);background:var(--phone-bg);
+    padding:11px 18px;display:flex;align-items:center;justify-content:space-between;
+    cursor:pointer;
+  }
+  .orderbar-info{font-size:11.5px;color:var(--muted);}
+  .orderbar-info strong{color:var(--text);font-family:var(--mono);}
+  .send-btn{
+    padding:10px 18px;border-radius:10px;border:none;
+    background:var(--amber);color:#241a05;font-weight:800;font-size:12px;
+    letter-spacing:.3px;cursor:pointer;text-transform:uppercase;
+    transition:filter .12s ease, transform .08s ease;
+  }
+  .send-btn:disabled{background:var(--panel-alt);color:var(--muted);cursor:not-allowed;}
+  .send-btn:not(:disabled):active{transform:scale(.96);}
+
+  .order-drawer{
+    position:absolute;left:0;right:0;bottom:60px;z-index:1;
+    background:var(--panel-alt);border-top:1px solid var(--hairline);
+    border-radius:18px 18px 0 0;max-height:0;overflow:hidden;
+    transition:max-height .25s ease;
+  }
+  .order-drawer.open{max-height:230px;overflow-y:auto;}
+  .order-drawer-inner{padding:14px 18px;}
+  .drawer-row{display:flex;align-items:center;justify-content:space-between;font-family:var(--mono);font-size:12px;padding:5px 0;}
+  .drawer-row-remove{color:var(--muted);font-size:11px;cursor:pointer;}
+  .drawer-row-remove:hover{color:var(--rust);}
+
+  .phone-home-indicator{width:120px;height:4px;border-radius:3px;background:rgba(255,255,255,.3);margin:9px auto 3px;flex:none;}
+
+  /* ---------- kitchen frame ---------- */
+  .kitchen-frame{
+    width:clamp(280px,92vw,480px);
+    border-radius:18px;
+    background:linear-gradient(160deg,#4d4f53,#212225 65%);
+    padding:14px 14px 24px;
+    box-shadow:0 34px 60px -22px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.06) inset;
+    position:relative;
+  }
+  .kitchen-frame::after{
+    content:"";position:absolute;bottom:-16px;left:50%;transform:translateX(-50%);
+    width:110px;height:9px;background:linear-gradient(180deg,#3a3c40,#1c1d1f);border-radius:0 0 6px 6px;
+  }
+  .kitchen-screen{background:var(--kitchen-bg);border-radius:9px;padding:16px;min-height:600px;display:flex;flex-direction:column;}
+  .kitchen-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;}
+  .kitchen-title{font-size:13.5px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;}
+  .kitchen-clock{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:3px;}
+  .queue-pill{
+    display:flex;align-items:center;gap:7px;
+    background:rgba(209,87,61,.12);border:1px solid var(--rust);
+    color:var(--rust);padding:6px 11px;border-radius:100px;font-size:11.5px;font-weight:700;
+  }
+  .spinner{width:10px;height:10px;border-radius:50%;border:2px solid rgba(209,87,61,.3);border-top-color:var(--rust);animation:spin .7s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  .ticket-rail{
+    flex:1;overflow-y:auto;
+    display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;align-content:start;
+  }
+  .empty-state{grid-column:1/-1;color:var(--muted);font-size:12.5px;border:1px dashed var(--hairline);border-radius:10px;padding:24px;text-align:center;}
+
+  .ticket{
+    background:#EDE7D8;color:#221f18;border-radius:2px;padding:13px 13px 11px;
+    font-family:var(--mono);font-size:11.5px;position:relative;
+    box-shadow:0 6px 16px rgba(0,0,0,.35);
+  }
+  .ticket.printing{animation:printIn .38s cubic-bezier(.2,.9,.3,1.2);}
+  .ticket::before{
+    content:"";position:absolute;top:0;left:0;right:0;height:6px;
+    background-image:repeating-linear-gradient(90deg, transparent 0 6px, rgba(0,0,0,.18) 6px 7px);
+    background-size:14px 6px;background-repeat:repeat-x;background-position:top;
+  }
+  @keyframes printIn{0%{opacity:0;transform:translateY(-16px) scale(.97);}100%{opacity:1;transform:translateY(0) scale(1);}}
+  .ticket-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px;border-bottom:1px dashed #b9b195;padding-bottom:5px;}
+  .ticket-num,.ticket-table{font-weight:800;font-size:11.5px;}
+  .ticket-items{margin:7px 0;line-height:1.55;}
+  .ticket-items div{display:flex;justify-content:space-between;}
+  .ticket-foot{display:flex;justify-content:space-between;align-items:center;margin-top:7px;padding-top:7px;border-top:1px dashed #b9b195;}
+  .ticket-time{color:#6b6555;font-size:10px;}
+  .sync-badge{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.3px;padding:3px 6px;border-radius:100px;}
+  .sync-synced{background:rgba(79,169,122,.18);color:#2c6b4b;}
+  .sync-queued{background:rgba(209,87,61,.18);color:#a5432c;}
+  .ready-btn{
+    margin-top:9px;width:100%;padding:6px;border-radius:5px;border:1px solid #b9b195;
+    background:transparent;color:#221f18;font-family:var(--sans);font-weight:700;font-size:10.5px;
+    cursor:pointer;text-transform:uppercase;letter-spacing:.3px;
+  }
+  .ready-btn:hover{background:#221f18;color:#EDE7D8;}
+  .ready-btn:disabled{opacity:.4;cursor:default;}
+  .ready-btn:disabled:hover{background:transparent;color:#221f18;}
+
+  @media (prefers-reduced-motion: reduce){
+    .dot-green,.dot-rust,.spinner,.ticket.printing{animation:none !important;}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="masthead">
+    <div class="brand">
+      <div class="brand-mark">HM</div>
+      <div>
+        <div class="brand-name">Hotel Mejwani</div>
+        <div class="brand-sub">Offline-First Order Flow</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <span class="controls-label">Demo</span>
+    <div class="status-pill"><span class="dot dot-green"></span> LAN <strong>Connected</strong></div>
+    <div class="status-pill"><span class="dot dot-green" id="cloudDot"></span> Cloud <strong id="cloudLabel">Connected</strong></div>
+    <div class="device-toggle" id="deviceToggle">
+      <button data-device="waiter" class="active">Waiter</button>
+      <button data-device="kitchen">Kitchen</button>
+    </div>
+    <button class="outage-btn" id="outageBtn">Simulate internet outage</button>
+  </div>
+
+  <p class="explainer">The waiter's phone talks straight to the kitchen display over the restaurant's own WiFi — <strong>no internet required.</strong> Cloud sync (backup &amp; sales reports) runs on a separate channel and catches up automatically once the connection returns.</p>
+
+  <div class="stage" id="stage">
+
+    <div class="device-frame" id="waiterDevice">
+      <div class="device-label">Waiter · Phone</div>
+      <div class="phone-frame">
+        <div class="phone-notch"></div>
+        <div class="phone-screen">
+          <div class="phone-statusbar">
+            <span>9:41</span>
+            <div class="net-indicators">
+              <span><span class="mini-dot" style="background:var(--green)"></span>LAN</span>
+              <span><span class="mini-dot" id="phoneCloudDot" style="background:var(--green)"></span>Cloud</span>
+            </div>
+          </div>
+          <div class="phone-appbar">
+            <div>
+              <div class="phone-appbar-title">Hotel Mejwani</div>
+              <div class="phone-appbar-sub">Waiter · Aarav</div>
+            </div>
+            <div class="avatar">A</div>
+          </div>
+
+          <div class="phone-body">
+            <div class="section-label">Tables</div>
+            <div class="tables" id="tables"></div>
+
+            <div class="section-label spaced">Menu</div>
+            <div class="menu-list" id="menu"></div>
+          </div>
+
+          <div class="order-drawer" id="orderDrawer">
+            <div class="order-drawer-inner" id="orderDrawerInner"></div>
+          </div>
+
+          <div class="phone-orderbar" id="orderBar">
+            <div class="orderbar-info" id="orderInfo">Select a table to start an order</div>
+            <button class="send-btn" id="sendBtn" disabled>Send</button>
+          </div>
+          <div class="phone-home-indicator"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="device-frame" id="kitchenDevice">
+      <div class="device-label">Kitchen · Display</div>
+      <div class="kitchen-frame">
+        <div class="kitchen-screen">
+          <div class="kitchen-header">
+            <div>
+              <div class="kitchen-title">Order Queue</div>
+              <div class="kitchen-clock" id="clock"></div>
+            </div>
+            <div class="queue-pill" id="queuePill" hidden>
+              <span class="spinner"></span>
+              <span id="queueCount">0</span> queued for cloud sync
+            </div>
+          </div>
+          <div class="ticket-rail" id="ticketRail">
+            <div class="empty-state">No tickets yet — send an order from the waiter's phone.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const MENU = [
+    { id:'m1', name:'Paneer Tikka',      price:220 },
+    { id:'m2', name:'Chicken Biryani',   price:280 },
+    { id:'m3', name:'Butter Naan',       price:45  },
+    { id:'m4', name:'Veg Kolhapuri',     price:190 },
+    { id:'m5', name:'Tandoori Chicken',  price:320 },
+    { id:'m6', name:'Dal Tadka',         price:160 },
+  ];
+
+  const state = {
+    tables: [1,2,3,4,5,6].map(n => ({ id:n, status:'available' })),
+    selectedTable: null,
+    drafts: {},
+    ticketSeq: 11,
+    cloudOnline: true,
+    cloudQueue: [],
+    tickets: [],
+    drawerOpen: false,
+  };
+
+  const el = {
+    tables: document.getElementById('tables'),
+    menu: document.getElementById('menu'),
+    orderInfo: document.getElementById('orderInfo'),
+    sendBtn: document.getElementById('sendBtn'),
+    orderBar: document.getElementById('orderBar'),
+    orderDrawer: document.getElementById('orderDrawer'),
+    orderDrawerInner: document.getElementById('orderDrawerInner'),
+    ticketRail: document.getElementById('ticketRail'),
+    queuePill: document.getElementById('queuePill'),
+    queueCount: document.getElementById('queueCount'),
+    cloudDot: document.getElementById('cloudDot'),
+    phoneCloudDot: document.getElementById('phoneCloudDot'),
+    cloudLabel: document.getElementById('cloudLabel'),
+    outageBtn: document.getElementById('outageBtn'),
+    clock: document.getElementById('clock'),
+    stage: document.getElementById('stage'),
+    waiterDevice: document.getElementById('waiterDevice'),
+    kitchenDevice: document.getElementById('kitchenDevice'),
+    deviceToggle: document.getElementById('deviceToggle'),
+  };
+
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ---------- rendering ----------
+  function renderTables(){
+    el.tables.innerHTML = state.tables.map(t => {
+      const labelMap = { available:'Open', occupied:'Ordering', kot:'Kitchen', ready:'Ready' };
+      return `
+        <div class="table-btn status-${t.status} ${state.selectedTable===t.id?'selected':''}" data-table="${t.id}" tabindex="0" role="button">
+          T${t.id}
+          <span class="table-status-dot"></span>
+          <span class="table-status-label">${labelMap[t.status]}</span>
+        </div>`;
+    }).join('');
+    el.tables.querySelectorAll('.table-btn').forEach(btn=>{
+      btn.addEventListener('click', () => selectTable(Number(btn.dataset.table)));
+      btn.addEventListener('keydown', e => { if(e.key==='Enter'||e.key===' '){ e.preventDefault(); selectTable(Number(btn.dataset.table)); }});
+    });
+  }
+
+  function renderMenu(){
+    el.menu.innerHTML = MENU.map(item => {
+      const qty = (state.drafts[state.selectedTable] || {})[item.id] || 0;
+      return `
+      <div class="menu-item">
+        <div>
+          <div class="menu-item-name">${item.name}</div>
+          <div class="menu-item-price">₹${item.price}</div>
+        </div>
+        <div class="qty-stepper">
+          ${qty > 0 ? `<button class="qty-btn" data-minus="${item.id}">−</button><span class="qty-val">${qty}</span>` : ''}
+          <button class="qty-btn plus" data-plus="${item.id}">+</button>
+        </div>
+      </div>`;
+    }).join('');
+    el.menu.querySelectorAll('[data-plus]').forEach(b => b.addEventListener('click', () => addItem(b.dataset.plus)));
+    el.menu.querySelectorAll('[data-minus]').forEach(b => b.addEventListener('click', () => removeItem(b.dataset.minus)));
+  }
+
+  function selectTable(id){
+    state.selectedTable = id;
+    renderTables();
+    renderMenu();
+    renderOrderBar();
+    renderDrawer();
+  }
+
+  function addItem(itemId){
+    if(!state.selectedTable) return;
+    const draft = state.drafts[state.selectedTable] || {};
+    draft[itemId] = (draft[itemId] || 0) + 1;
+    state.drafts[state.selectedTable] = draft;
+    const table = state.tables.find(t => t.id === state.selectedTable);
+    if(table.status === 'available') table.status = 'occupied';
+    renderTables(); renderMenu(); renderOrderBar(); renderDrawer();
+  }
+
+  function removeItem(itemId){
+    const draft = state.drafts[state.selectedTable];
+    if(!draft) return;
+    draft[itemId] -= 1;
+    if(draft[itemId] <= 0) delete draft[itemId];
+    renderMenu(); renderOrderBar(); renderDrawer();
+  }
+
+  function orderCount(){
+    const draft = state.drafts[state.selectedTable] || {};
+    return Object.values(draft).reduce((a,b)=>a+b,0);
+  }
+  function orderTotal(){
+    const draft = state.drafts[state.selectedTable] || {};
+    return Object.entries(draft).reduce((sum,[id,qty]) => sum + qty * MENU.find(m=>m.id===id).price, 0);
+  }
+
+  function renderOrderBar(){
+    if(!state.selectedTable){
+      el.orderInfo.textContent = 'Select a table to start an order';
+      el.sendBtn.disabled = true;
+      return;
+    }
+    const n = orderCount();
+    if(n === 0){
+      el.orderInfo.innerHTML = `Table <strong>T${state.selectedTable}</strong> · no items yet`;
+      el.sendBtn.disabled = true;
+    } else {
+      el.orderInfo.innerHTML = `Table <strong>T${state.selectedTable}</strong> · ${n} item${n>1?'s':''} · ₹${orderTotal()}`;
+      el.sendBtn.disabled = false;
+    }
+  }
+
+  function renderDrawer(){
+    const draft = state.drafts[state.selectedTable] || {};
+    const entries = Object.entries(draft);
+    if(entries.length === 0){
+      el.orderDrawerInner.innerHTML = `<div style="color:var(--muted);font-size:11.5px;padding:14px 0;">No items yet — tap + on the menu.</div>`;
+      return;
+    }
+    el.orderDrawerInner.innerHTML = entries.map(([id,qty]) => {
+      const item = MENU.find(m=>m.id===id);
+      return `<div class="drawer-row"><span>${qty}× ${item.name}</span><span class="drawer-row-remove" data-remove="${id}">remove</span></div>`;
+    }).join('');
+    el.orderDrawerInner.querySelectorAll('[data-remove]').forEach(x=>{
+      x.addEventListener('click', (e)=>{ e.stopPropagation(); removeItem(x.dataset.remove); });
+    });
+  }
+
+  el.orderBar.addEventListener('click', (e) => {
+    if(e.target.id === 'sendBtn') return;
+    if(!state.selectedTable || orderCount() === 0) return;
+    state.drawerOpen = !state.drawerOpen;
+    el.orderDrawer.classList.toggle('open', state.drawerOpen);
+  });
+
+  function sendToKitchen(){
+    const draft = state.drafts[state.selectedTable];
+    if(!draft || Object.keys(draft).length === 0) return;
+
+    const ticket = {
+      id: state.ticketSeq++,
+      table: state.selectedTable,
+      items: Object.entries(draft).map(([id, qty]) => ({ name: MENU.find(m=>m.id===id).name, qty })),
+      time: new Date(),
+      synced: state.cloudOnline,
+      ready: false,
+    };
+
+    fireSignal();
+
+    const doPrint = () => {
+      state.tickets.unshift(ticket);
+      renderTickets(ticket.id);
+      const table = state.tables.find(t => t.id === state.selectedTable);
+      table.status = 'kot';
+
+      if(state.cloudOnline){
+        setTimeout(() => { ticket.synced = true; renderTickets(); }, 500);
+      } else {
+        ticket.synced = false;
+        state.cloudQueue.push(ticket.id);
+        renderQueuePill();
+      }
+
+      state.drawerOpen = false;
+      el.orderDrawer.classList.remove('open');
+      delete state.drafts[state.selectedTable];
+      renderTables(); renderMenu(); renderOrderBar(); renderDrawer();
+    };
+
+    // small delay so the signal is visible traveling before the ticket prints
+    setTimeout(doPrint, bothDevicesVisible() && !reduceMotion ? 480 : 0);
+  }
+
+  function markReady(ticketId){
+    const ticket = state.tickets.find(t => t.id === ticketId);
+    if(!ticket) return;
+    ticket.ready = true;
+    const table = state.tables.find(t => t.id === ticket.table);
+    if(table) table.status = 'ready';
+    renderTables();
+    renderTickets();
+  }
+
+  function timeAgo(date){
+    const s = Math.max(0, Math.floor((Date.now()-date.getTime())/1000));
+    if(s < 60) return `${s}s ago`;
+    return `${Math.floor(s/60)}m ago`;
+  }
+
+  function renderTickets(freshId){
+    if(state.tickets.length === 0){
+      el.ticketRail.innerHTML = `<div class="empty-state">No tickets yet — send an order from the waiter's phone.</div>`;
+      return;
+    }
+    el.ticketRail.innerHTML = state.tickets.map(ticket => `
+      <div class="ticket ${ticket.id===freshId?'printing':''}">
+        <div class="ticket-head">
+          <span class="ticket-num">#${String(ticket.id).padStart(3,'0')}</span>
+          <span class="ticket-table">T${ticket.table}</span>
+        </div>
+        <div class="ticket-items">
+          ${ticket.items.map(i => `<div><span>${i.qty}× ${i.name}</span></div>`).join('')}
+        </div>
+        <div class="ticket-foot">
+          <span class="ticket-time">${timeAgo(ticket.time)}</span>
+          <span class="sync-badge ${ticket.synced ? 'sync-synced' : 'sync-queued'}">${ticket.synced ? 'Synced' : 'Cloud queued'}</span>
+        </div>
+        <button class="ready-btn" data-ready="${ticket.id}" ${ticket.ready ? 'disabled' : ''}>
+          ${ticket.ready ? 'Ready — sent to table' : 'Mark ready'}
+        </button>
+      </div>
+    `).join('');
+    el.ticketRail.querySelectorAll('[data-ready]').forEach(btn=>{
+      btn.addEventListener('click', () => markReady(Number(btn.dataset.ready)));
+    });
+  }
+
+  function renderQueuePill(){
+    const n = state.cloudQueue.length;
+    el.queuePill.hidden = n === 0;
+    el.queueCount.textContent = n;
+  }
+
+  function toggleOutage(){
+    state.cloudOnline = !state.cloudOnline;
+    if(!state.cloudOnline){
+      el.cloudDot.className = 'dot dot-rust';
+      el.phoneCloudDot.style.background = 'var(--rust)';
+      el.cloudLabel.textContent = 'Offline';
+      el.outageBtn.textContent = 'Restore internet connection';
+      el.outageBtn.classList.add('is-down');
+    } else {
+      el.cloudDot.className = 'dot dot-green';
+      el.phoneCloudDot.style.background = 'var(--green)';
+      el.cloudLabel.textContent = 'Reconnecting…';
+      el.outageBtn.textContent = 'Simulate internet outage';
+      el.outageBtn.classList.remove('is-down');
+
+      const queued = [...state.cloudQueue];
+      state.cloudQueue = [];
+      renderQueuePill();
+      queued.forEach((ticketId, i) => {
+        setTimeout(() => {
+          const ticket = state.tickets.find(t => t.id === ticketId);
+          if(ticket) ticket.synced = true;
+          renderTickets();
+          if(i === queued.length - 1) setTimeout(() => { el.cloudLabel.textContent = 'Connected'; }, 200);
+        }, 450 + i * 480);
+      });
+      if(queued.length === 0) el.cloudLabel.textContent = 'Connected';
+    }
+  }
+
+  // ---------- device toggle (mobile viewport) ----------
+  el.deviceToggle.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      el.deviceToggle.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const target = btn.dataset.device;
+      el.waiterDevice.classList.toggle('inactive', target !== 'waiter');
+      el.kitchenDevice.classList.toggle('inactive', target !== 'kitchen');
+    });
+  });
+
+  function bothDevicesVisible(){
+    return el.waiterDevice.offsetParent !== null && el.kitchenDevice.offsetParent !== null
+      && !el.waiterDevice.classList.contains('inactive') && !el.kitchenDevice.classList.contains('inactive');
+  }
+
+  function fireSignal(){
+    if(reduceMotion || !bothDevicesVisible()) return;
+    const stageRect = el.stage.getBoundingClientRect();
+    const a = el.sendBtn.getBoundingClientRect();
+    const b = el.ticketRail.getBoundingClientRect();
+    const startX = a.left + a.width/2 - stageRect.left;
+    const startY = a.top + a.height/2 - stageRect.top;
+    const endX = b.left + 40 - stageRect.left;
+    const endY = b.top + 20 - stageRect.top;
+    const midX = (startX+endX)/2;
+    const midY = Math.min(startY,endY) - 70;
+
+    const dot = document.createElement('div');
+    dot.className = 'signal-dot';
+    dot.style.left = startX + 'px';
+    dot.style.top = startY + 'px';
+    el.stage.appendChild(dot);
+
+    dot.animate([
+      { transform:'translate(0,0)', opacity:1 },
+      { transform:`translate(${midX-startX}px, ${midY-startY}px)`, opacity:1, offset:0.5 },
+      { transform:`translate(${endX-startX}px, ${endY-startY}px)`, opacity:0 },
+    ], { duration:600, easing:'cubic-bezier(.3,.6,.3,1)' }).onfinish = () => dot.remove();
+  }
+
+  function tickClock(){
+    el.clock.textContent = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  }
+  setInterval(() => { tickClock(); renderTickets(); }, 1000);
+
+  el.sendBtn.addEventListener('click', sendToKitchen);
+  el.outageBtn.addEventListener('click', toggleOutage);
+
+  renderTables();
+  renderMenu();
+  renderOrderBar();
+  renderDrawer();
+  renderTickets();
+  renderQueuePill();
+  tickClock();
+</script>
+</body>
+</html>

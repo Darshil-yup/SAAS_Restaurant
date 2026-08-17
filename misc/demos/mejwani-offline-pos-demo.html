@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hotel Mejwani — Offline-First Order Flow</title>
+<style>
+  :root{
+    --bg:#17181A;
+    --panel:#202225;
+    --panel-alt:#26282C;
+    --amber:#E9A23B;
+    --amber-dim:#7A5A24;
+    --green:#4FA97A;
+    --rust:#D1573D;
+    --blue:#5B8DBE;
+    --text:#F2EEE5;
+    --muted:#9B968C;
+    --hairline:#34363A;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(ellipse 900px 500px at 15% -10%, #232427 0%, transparent 60%),
+      var(--bg);
+    color:var(--text);
+    font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;
+  }
+  .app{max-width:1180px;margin:0 auto;padding:28px 20px 60px;}
+
+  /* ---------- top bar ---------- */
+  .topbar{
+    display:flex;align-items:center;justify-content:space-between;
+    flex-wrap:wrap;gap:14px;
+    padding-bottom:18px;border-bottom:1px solid var(--hairline);
+  }
+  .brand{display:flex;align-items:center;gap:12px;}
+  .brand-mark{
+    width:40px;height:40px;border-radius:10px;
+    background:linear-gradient(155deg, var(--amber), #b9791f);
+    color:#1b1400;font-weight:900;font-family:var(--mono);
+    display:flex;align-items:center;justify-content:center;font-size:14px;
+    letter-spacing:0.5px;
+  }
+  .brand-name{font-weight:800;font-size:17px;letter-spacing:0.3px;}
+  .brand-sub{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1.2px;margin-top:2px;}
+
+  .status-cluster{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .status-pill{
+    display:flex;align-items:center;gap:7px;
+    background:var(--panel);border:1px solid var(--hairline);
+    padding:7px 12px;border-radius:100px;
+    font-size:12.5px;color:var(--muted);
+  }
+  .status-pill strong{color:var(--text);font-weight:700;}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none;}
+  .dot-green{background:var(--green);box-shadow:0 0 0 0 rgba(79,169,122,0.6);animation:pulseGreen 2s infinite;}
+  .dot-rust{background:var(--rust);animation:pulseRust 1s infinite;}
+  @keyframes pulseGreen{
+    0%{box-shadow:0 0 0 0 rgba(79,169,122,0.55);}
+    70%{box-shadow:0 0 0 6px rgba(79,169,122,0);}
+    100%{box-shadow:0 0 0 0 rgba(79,169,122,0);}
+  }
+  @keyframes pulseRust{
+    0%{opacity:1;} 50%{opacity:0.35;} 100%{opacity:1;}
+  }
+  .outage-btn{
+    background:var(--panel-alt);color:var(--text);
+    border:1px solid var(--hairline);border-radius:8px;
+    padding:8px 14px;font-size:12.5px;font-weight:600;cursor:pointer;
+    transition:border-color .15s ease, background .15s ease;
+  }
+  .outage-btn:hover{border-color:var(--amber);}
+  .outage-btn.is-down{background:var(--rust);border-color:var(--rust);color:#241009;}
+
+  .explainer{
+    color:var(--muted);font-size:13px;line-height:1.55;
+    max-width:760px;margin:16px 0 26px;
+  }
+  .explainer strong{color:var(--text);}
+
+  /* ---------- layout ---------- */
+  .grid{display:grid;grid-template-columns:340px 1fr;gap:18px;align-items:start;}
+  @media (max-width:820px){ .grid{grid-template-columns:1fr;} }
+
+  .panel{
+    background:var(--panel);border:1px solid var(--hairline);
+    border-radius:14px;padding:18px;
+  }
+  .panel-title{font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:0.8px;margin:0 0 14px;}
+  .panel-title-muted{color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0;}
+
+  /* ---------- tables ---------- */
+  .tables{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:18px;}
+  .table-btn{
+    position:relative;
+    background:var(--panel-alt);border:1px solid var(--hairline);
+    border-radius:10px;padding:12px 6px 10px;text-align:center;
+    cursor:pointer;color:var(--text);font-family:var(--mono);font-size:13px;font-weight:600;
+    transition:transform .1s ease, border-color .15s ease;
+  }
+  .table-btn:hover{transform:translateY(-1px);}
+  .table-btn.selected{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber) inset;}
+  .table-status-dot{
+    position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;
+  }
+  .status-available .table-status-dot{background:var(--green);}
+  .status-occupied .table-status-dot{background:var(--rust);}
+  .status-kot .table-status-dot{background:var(--amber);}
+  .status-ready .table-status-dot{background:var(--blue);}
+  .table-status-label{display:block;font-family:var(--sans);font-size:9.5px;color:var(--muted);margin-top:4px;text-transform:uppercase;letter-spacing:0.5px;}
+
+  /* ---------- menu ---------- */
+  .section-label{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin:0 0 10px;}
+  .menu{display:flex;flex-direction:column;gap:6px;margin-bottom:18px;}
+  .menu-item{
+    display:flex;align-items:center;justify-content:space-between;
+    background:var(--panel-alt);border:1px solid var(--hairline);
+    border-radius:9px;padding:9px 11px;cursor:pointer;
+    transition:border-color .12s ease;
+  }
+  .menu-item:hover{border-color:var(--amber-dim);}
+  .menu-item-name{font-size:13px;}
+  .menu-item-price{font-family:var(--mono);font-size:12px;color:var(--muted);}
+  .menu-item-add{
+    width:22px;height:22px;border-radius:6px;background:var(--amber);color:#241a05;
+    display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;margin-left:10px;
+  }
+  .menu-item-row{display:flex;align-items:center;}
+
+  /* ---------- draft / order ---------- */
+  .draft{border-top:1px dashed var(--hairline);padding-top:14px;}
+  .draft-header{font-size:12.5px;color:var(--muted);margin-bottom:10px;font-weight:600;}
+  .draft-items{display:flex;flex-direction:column;gap:6px;min-height:20px;margin-bottom:12px;}
+  .draft-row{
+    display:flex;align-items:center;justify-content:space-between;
+    font-size:13px;font-family:var(--mono);
+  }
+  .draft-row-qty{color:var(--amber);margin-right:8px;}
+  .draft-row-remove{color:var(--muted);cursor:pointer;font-size:12px;padding:2px 6px;}
+  .draft-row-remove:hover{color:var(--rust);}
+  .send-btn{
+    width:100%;padding:12px;border-radius:10px;border:none;
+    background:var(--amber);color:#241a05;font-weight:800;font-size:13.5px;
+    letter-spacing:0.3px;cursor:pointer;text-transform:uppercase;
+    transition:filter .12s ease, transform .08s ease;
+  }
+  .send-btn:disabled{background:var(--panel-alt);color:var(--muted);cursor:not-allowed;}
+  .send-btn:not(:disabled):hover{filter:brightness(1.08);}
+  .send-btn:not(:disabled):active{transform:scale(0.98);}
+
+  /* ---------- kitchen ---------- */
+  .kitchen-header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px;}
+  .queue-pill{
+    display:flex;align-items:center;gap:8px;
+    background:rgba(209,87,61,0.12);border:1px solid var(--rust);
+    color:var(--rust);padding:6px 12px;border-radius:100px;font-size:12px;font-weight:700;
+  }
+  .spinner{
+    width:11px;height:11px;border-radius:50%;
+    border:2px solid rgba(209,87,61,0.3);border-top-color:var(--rust);
+    animation:spin .7s linear infinite;
+  }
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  .ticket-rail{
+    display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));
+    gap:14px;
+  }
+  .empty-state{
+    grid-column:1/-1;color:var(--muted);font-size:13px;
+    border:1px dashed var(--hairline);border-radius:10px;padding:26px;text-align:center;
+  }
+  .ticket{
+    background:#EDE7D8;color:#221f18;border-radius:2px;
+    padding:14px 14px 12px;font-family:var(--mono);font-size:12px;
+    position:relative;
+    box-shadow:0 6px 16px rgba(0,0,0,0.35);
+    animation:printIn .38s cubic-bezier(.2,.9,.3,1.2);
+  }
+  .ticket::before{
+    content:"";position:absolute;top:0;left:0;right:0;height:6px;
+    background-image:repeating-linear-gradient(90deg, transparent 0 6px, rgba(0,0,0,0.18) 6px 7px);
+    background-size:14px 6px;background-repeat:repeat-x;background-position:top;
+  }
+  @keyframes printIn{
+    0%{opacity:0;transform:translateY(-16px) scale(.97);}
+    100%{opacity:1;transform:translateY(0) scale(1);}
+  }
+  .ticket-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;border-bottom:1px dashed #b9b195;padding-bottom:6px;}
+  .ticket-num{font-weight:800;font-size:12.5px;}
+  .ticket-table{font-weight:800;font-size:12.5px;}
+  .ticket-items{margin:8px 0;line-height:1.6;}
+  .ticket-items div{display:flex;justify-content:space-between;}
+  .ticket-foot{display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px dashed #b9b195;}
+  .ticket-time{color:#6b6555;font-size:10.5px;}
+  .sync-badge{
+    font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:0.4px;
+    padding:3px 7px;border-radius:100px;
+  }
+  .sync-synced{background:rgba(79,169,122,0.18);color:#2c6b4b;}
+  .sync-queued{background:rgba(209,87,61,0.18);color:#a5432c;}
+  .ready-btn{
+    margin-top:10px;width:100%;padding:7px;border-radius:5px;border:1px solid #b9b195;
+    background:transparent;color:#221f18;font-family:var(--sans);font-weight:700;font-size:11px;
+    cursor:pointer;text-transform:uppercase;letter-spacing:0.4px;
+  }
+  .ready-btn:hover{background:#221f18;color:#EDE7D8;}
+  .ready-btn:disabled{opacity:0.4;cursor:default;}
+  .ready-btn:disabled:hover{background:transparent;color:#221f18;}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">HM</div>
+      <div>
+        <div class="brand-name">Hotel Mejwani</div>
+        <div class="brand-sub">Table Service · Offline Demo</div>
+      </div>
+    </div>
+    <div class="status-cluster">
+      <div class="status-pill">
+        <span class="dot dot-green"></span> LAN <strong>Connected</strong>
+      </div>
+      <div class="status-pill">
+        <span class="dot dot-green" id="cloudDot"></span> Cloud <strong id="cloudLabel">Connected</strong>
+      </div>
+      <button class="outage-btn" id="outageBtn">Simulate internet outage</button>
+    </div>
+  </header>
+
+  <p class="explainer">Orders reach the kitchen over the restaurant's own WiFi — <strong>no internet required.</strong> Cloud sync (backup &amp; sales reports) runs on a separate channel and catches up automatically once the connection returns. Toggle the outage button above to see both paths behave independently.</p>
+
+  <main class="grid">
+    <section class="panel">
+      <h2 class="panel-title">Waiter <span class="panel-title-muted">— order entry</span></h2>
+
+      <div class="tables" id="tables"></div>
+
+      <div class="section-label">Menu</div>
+      <div class="menu" id="menu"></div>
+
+      <div class="draft">
+        <div class="draft-header" id="draftHeader">Select a table to start an order</div>
+        <div class="draft-items" id="draftItems"></div>
+        <button class="send-btn" id="sendBtn" disabled>Send to Kitchen</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="kitchen-header">
+        <h2 class="panel-title" style="margin:0;">Kitchen Display <span class="panel-title-muted">— live tickets</span></h2>
+        <div class="queue-pill" id="queuePill" hidden>
+          <span class="spinner"></span>
+          <span id="queueCount">0</span> queued for cloud sync
+        </div>
+      </div>
+      <div class="ticket-rail" id="ticketRail">
+        <div class="empty-state">No tickets yet — send an order from the waiter panel.</div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+  const MENU = [
+    { id:'m1', name:'Paneer Tikka',      price:220 },
+    { id:'m2', name:'Chicken Biryani',   price:280 },
+    { id:'m3', name:'Butter Naan',       price:45  },
+    { id:'m4', name:'Veg Kolhapuri',     price:190 },
+    { id:'m5', name:'Tandoori Chicken',  price:320 },
+    { id:'m6', name:'Dal Tadka',         price:160 },
+  ];
+
+  const state = {
+    tables: [1,2,3,4,5,6].map(n => ({ id:n, status:'available' })),
+    selectedTable: null,
+    drafts: {},          // tableId -> { itemId: qty }
+    ticketSeq: 11,
+    cloudOnline: true,
+    cloudQueue: [],       // ticket ids waiting to sync
+    tickets: [],           // rendered, most recent first
+  };
+
+  const el = {
+    tables: document.getElementById('tables'),
+    menu: document.getElementById('menu'),
+    draftHeader: document.getElementById('draftHeader'),
+    draftItems: document.getElementById('draftItems'),
+    sendBtn: document.getElementById('sendBtn'),
+    ticketRail: document.getElementById('ticketRail'),
+    queuePill: document.getElementById('queuePill'),
+    queueCount: document.getElementById('queueCount'),
+    cloudDot: document.getElementById('cloudDot'),
+    cloudLabel: document.getElementById('cloudLabel'),
+    outageBtn: document.getElementById('outageBtn'),
+  };
+
+  function renderTables(){
+    el.tables.innerHTML = state.tables.map(t => {
+      const labelMap = { available:'Open', occupied:'Ordering', kot:'In kitchen', ready:'Ready' };
+      return `
+        <div class="table-btn status-${t.status} ${state.selectedTable===t.id?'selected':''}" data-table="${t.id}">
+          T${t.id}
+          <span class="table-status-dot"></span>
+          <span class="table-status-label">${labelMap[t.status]}</span>
+        </div>`;
+    }).join('');
+    el.tables.querySelectorAll('.table-btn').forEach(btn=>{
+      btn.addEventListener('click', () => selectTable(Number(btn.dataset.table)));
+    });
+  }
+
+  function renderMenu(){
+    el.menu.innerHTML = MENU.map(item => `
+      <div class="menu-item" data-item="${item.id}">
+        <div class="menu-item-row">
+          <div>
+            <div class="menu-item-name">${item.name}</div>
+            <div class="menu-item-price">₹${item.price}</div>
+          </div>
+        </div>
+        <div class="menu-item-add">+</div>
+      </div>`).join('');
+    el.menu.querySelectorAll('.menu-item').forEach(row=>{
+      row.addEventListener('click', () => addItem(row.dataset.item));
+    });
+  }
+
+  function selectTable(id){
+    state.selectedTable = id;
+    renderTables();
+    renderDraft();
+  }
+
+  function addItem(itemId){
+    if(!state.selectedTable) return;
+    const draft = state.drafts[state.selectedTable] || {};
+    draft[itemId] = (draft[itemId] || 0) + 1;
+    state.drafts[state.selectedTable] = draft;
+
+    const table = state.tables.find(t => t.id === state.selectedTable);
+    if(table.status === 'available') table.status = 'occupied';
+
+    renderTables();
+    renderDraft();
+  }
+
+  function removeItem(itemId){
+    const draft = state.drafts[state.selectedTable];
+    if(!draft) return;
+    draft[itemId] -= 1;
+    if(draft[itemId] <= 0) delete draft[itemId];
+    renderDraft();
+  }
+
+  function renderDraft(){
+    if(!state.selectedTable){
+      el.draftHeader.textContent = 'Select a table to start an order';
+      el.draftItems.innerHTML = '';
+      el.sendBtn.disabled = true;
+      return;
+    }
+    const draft = state.drafts[state.selectedTable] || {};
+    const entries = Object.entries(draft);
+    el.draftHeader.innerHTML = `Table <strong style="color:var(--text)">T${state.selectedTable}</strong> — current order`;
+
+    if(entries.length === 0){
+      el.draftItems.innerHTML = `<div style="color:var(--muted);font-size:12.5px;">No items yet — tap the menu to add.</div>`;
+      el.sendBtn.disabled = true;
+      return;
+    }
+
+    el.draftItems.innerHTML = entries.map(([itemId, qty]) => {
+      const item = MENU.find(m => m.id === itemId);
+      return `
+        <div class="draft-row">
+          <span><span class="draft-row-qty">${qty}×</span>${item.name}</span>
+          <span class="draft-row-remove" data-remove="${itemId}">remove</span>
+        </div>`;
+    }).join('');
+    el.draftItems.querySelectorAll('[data-remove]').forEach(x=>{
+      x.addEventListener('click', () => removeItem(x.dataset.remove));
+    });
+    el.sendBtn.disabled = false;
+  }
+
+  function sendToKitchen(){
+    const draft = state.drafts[state.selectedTable];
+    if(!draft || Object.keys(draft).length === 0) return;
+
+    const ticket = {
+      id: state.ticketSeq++,
+      table: state.selectedTable,
+      items: Object.entries(draft).map(([itemId, qty]) => ({ name: MENU.find(m=>m.id===itemId).name, qty })),
+      time: new Date(),
+      synced: state.cloudOnline,
+      ready: false,
+    };
+
+    // LAN delivery: instant, always succeeds — independent of internet.
+    state.tickets.unshift(ticket);
+    renderTickets();
+
+    // Table moves to "in kitchen" the moment the ticket prints.
+    const table = state.tables.find(t => t.id === state.selectedTable);
+    table.status = 'kot';
+
+    // Cloud sync: separate channel, can lag or queue.
+    if(state.cloudOnline){
+      // simulate brief network latency for the sync confirmation
+      setTimeout(() => {
+        ticket.synced = true;
+        renderTickets();
+      }, 550);
+    } else {
+      ticket.synced = false;
+      state.cloudQueue.push(ticket.id);
+      renderQueuePill();
+    }
+
+    delete state.drafts[state.selectedTable];
+    renderTables();
+    renderDraft();
+  }
+
+  function markReady(ticketId){
+    const ticket = state.tickets.find(t => t.id === ticketId);
+    if(!ticket) return;
+    ticket.ready = true;
+    const table = state.tables.find(t => t.id === ticket.table);
+    if(table) table.status = 'ready';
+    renderTables();
+    renderTickets();
+  }
+
+  function timeAgo(date){
+    const s = Math.max(0, Math.floor((Date.now() - date.getTime())/1000));
+    if(s < 60) return `${s}s ago`;
+    return `${Math.floor(s/60)}m ago`;
+  }
+
+  function renderTickets(){
+    if(state.tickets.length === 0){
+      el.ticketRail.innerHTML = `<div class="empty-state">No tickets yet — send an order from the waiter panel.</div>`;
+      return;
+    }
+    el.ticketRail.innerHTML = state.tickets.map(ticket => `
+      <div class="ticket">
+        <div class="ticket-head">
+          <span class="ticket-num">#${String(ticket.id).padStart(3,'0')}</span>
+          <span class="ticket-table">TABLE ${ticket.table}</span>
+        </div>
+        <div class="ticket-items">
+          ${ticket.items.map(i => `<div><span>${i.qty}× ${i.name}</span></div>`).join('')}
+        </div>
+        <div class="ticket-foot">
+          <span class="ticket-time">${timeAgo(ticket.time)}</span>
+          <span class="sync-badge ${ticket.synced ? 'sync-synced' : 'sync-queued'}">
+            ${ticket.synced ? 'Synced' : 'Cloud queued'}
+          </span>
+        </div>
+        <button class="ready-btn" data-ready="${ticket.id}" ${ticket.ready ? 'disabled' : ''}>
+          ${ticket.ready ? 'Ready — sent to table' : 'Mark ready'}
+        </button>
+      </div>
+    `).join('');
+    el.ticketRail.querySelectorAll('[data-ready]').forEach(btn=>{
+      btn.addEventListener('click', () => markReady(Number(btn.dataset.ready)));
+    });
+  }
+
+  function renderQueuePill(){
+    const n = state.cloudQueue.length;
+    el.queuePill.hidden = n === 0;
+    el.queueCount.textContent = n;
+  }
+
+  function toggleOutage(){
+    state.cloudOnline = !state.cloudOnline;
+
+    if(!state.cloudOnline){
+      el.cloudDot.className = 'dot dot-rust';
+      el.cloudLabel.textContent = 'Offline';
+      el.outageBtn.textContent = 'Restore internet connection';
+      el.outageBtn.classList.add('is-down');
+    } else {
+      el.cloudDot.className = 'dot dot-green';
+      el.cloudLabel.textContent = 'Reconnecting…';
+      el.outageBtn.textContent = 'Simulate internet outage';
+      el.outageBtn.classList.remove('is-down');
+
+      // drain the queue with a staggered "catching up" animation
+      const queued = [...state.cloudQueue];
+      state.cloudQueue = [];
+      queued.forEach((ticketId, i) => {
+        setTimeout(() => {
+          const ticket = state.tickets.find(t => t.id === ticketId);
+          if(ticket) ticket.synced = true;
+          renderTickets();
+          renderQueuePill();
+          if(i === queued.length - 1){
+            setTimeout(() => { el.cloudLabel.textContent = 'Connected'; }, 200);
+          }
+        }, 450 + i * 500);
+      });
+      if(queued.length === 0) el.cloudLabel.textContent = 'Connected';
+      renderQueuePill();
+    }
+  }
+
+  el.sendBtn.addEventListener('click', sendToKitchen);
+  el.outageBtn.addEventListener('click', toggleOutage);
+
+  renderTables();
+  renderMenu();
+  renderDraft();
+  renderTickets();
+  renderQueuePill();
+</script>
+</body>
+</html>

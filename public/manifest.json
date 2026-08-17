@@ -1,0 +1,17 @@
+{
+  "short_name": "Waiter POS",
+  "name": "Mejwani Waiter Handset",
+  "description": "Offline-First LAN Waiter Handset PWA for Mejwani Restaurant POS",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📱</text></svg>",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512"
+    }
+  ],
+  "start_url": "/waiter",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "display": "standalone",
+  "orientation": "portrait"
+}

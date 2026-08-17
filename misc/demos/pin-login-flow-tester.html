@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Mejwani POS — PIN Login Flow Tester</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --bg:#121214; --panel:#1c1d20; --border:#33353a;
+    --amber:#E9A23B; --green:#4FA97A; --rust:#D1573D; --text:#F0EDE6; --muted:#9b968c;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  body{ background:var(--bg); color:var(--text); font-family:-apple-system,Segoe UI,sans-serif; margin:0; padding:30px 20px; }
+  .wrap{ max-width:760px; margin:0 auto; }
+  h1{ font-size:18px; margin:0 0 4px; }
+  p.sub{ color:var(--muted); font-size:13px; margin:0 0 22px; }
+  .panel{ background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px 18px; margin-bottom:14px; }
+  label{ display:block; font-size:11.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; margin-bottom:5px; margin-top:10px; }
+  label:first-child{ margin-top:0; }
+  input{
+    width:100%; background:#0f1011; border:1px solid var(--border); border-radius:7px;
+    padding:9px 10px; color:var(--text); font-family:var(--mono); font-size:12.5px; box-sizing:border-box;
+  }
+  .row{ display:flex; gap:10px; }
+  .row > div{ flex:1; }
+  .step{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .step h2{ font-size:14px; margin:0; }
+  .step p{ font-size:12px; color:var(--muted); margin:4px 0 0; }
+  button{
+    background:var(--amber); color:#241a05; border:none; border-radius:8px;
+    padding:9px 16px; font-weight:800; font-size:12.5px; cursor:pointer; white-space:nowrap;
+  }
+  button:disabled{ background:#3a3c40; color:var(--muted); cursor:not-allowed; }
+  .status{ font-family:var(--mono); font-size:11.5px; padding:3px 9px; border-radius:100px; }
+  .status.pending{ background:#2a2c30; color:var(--muted); }
+  .status.ok{ background:rgba(79,169,122,.15); color:var(--green); }
+  .status.fail{ background:rgba(209,87,61,.15); color:var(--rust); }
+  pre{
+    background:#0f1011; border:1px solid var(--border); border-radius:8px;
+    padding:12px; font-size:11.5px; font-family:var(--mono); overflow-x:auto;
+    white-space:pre-wrap; word-break:break-word; color:var(--text); margin-top:10px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>PIN Login Flow Tester</h1>
+  <p class="sub">Tests the real chain: anonymous session → verify_staff_pin() → RLS-scoped query. Run steps in order.</p>
+
+  <div class="panel">
+    <label>Supabase Project URL</label>
+    <input id="url" value="https://skefqgmtkjujqqjoqxka.supabase.co" />
+    <label>Anon Key (public — paste the full key from Project Settings → API)</label>
+    <input id="key" placeholder="eyJhbGciOi..." />
+    <div class="row">
+      <div>
+        <label>Restaurant Slug</label>
+        <input id="slug" value="hotel-mejwani" />
+      </div>
+      <div>
+        <label>Staff PIN</label>
+        <input id="pin" value="1234" />
+      </div>
+    </div>
+  </div>
+
+  <div class="panel step">
+    <div>
+      <h2>Step 1 — Sign in anonymously</h2>
+      <p>Creates a real (anonymous) auth session — this is what auth.uid() will resolve to.</p>
+    </div>
+    <span class="status pending" id="s1">Not run</span>
+  </div>
+  <button onclick="step1()">Run Step 1</button>
+  <pre id="out1" style="display:none"></pre>
+
+  <div class="panel step" style="margin-top:16px;">
+    <div>
+      <h2>Step 2 — Call verify_staff_pin()</h2>
+      <p>Checks PIN, links this session's uid to the matching staff_users row.</p>
+    </div>
+    <span class="status pending" id="s2">Not run</span>
+  </div>
+  <button onclick="step2()">Run Step 2</button>
+  <pre id="out2" style="display:none"></pre>
+
+  <div class="panel step" style="margin-top:16px;">
+    <div>
+      <h2>Step 3 — Query restaurants as this session</h2>
+      <p>Should now return exactly ONE row (their own restaurant) — not zero, not all three.</p>
+    </div>
+    <span class="status pending" id="s3">Not run</span>
+  </div>
+  <button onclick="step3()">Run Step 3</button>
+  <pre id="out3" style="display:none"></pre>
+</div>
+
+<script>
+  let client = null;
+
+  function setStatus(id, state, text){
+    const el = document.getElementById(id);
+    el.className = 'status ' + state;
+    el.textContent = text;
+  }
+  function showOut(id, obj){
+    const el = document.getElementById(id);
+    el.style.display = 'block';
+    el.textContent = JSON.stringify(obj, null, 2);
+  }
+  function getClient(){
+    if(typeof supabase === 'undefined'){
+      alert('Supabase library failed to load from CDN — check your internet connection and reload this page.');
+      return null;
+    }
+    const url = document.getElementById('url').value.trim();
+    const key = document.getElementById('key').value.trim();
+    if(!url || !key){ alert('Fill in the project URL and anon key first.'); return null; }
+    if(!client) client = supabase.createClient(url, key);
+    return client;
+  }
+
+  async function step1(){
+    try{
+      const c = getClient(); if(!c) return;
+      setStatus('s1','pending','Running…');
+      const { data, error } = await c.auth.signInAnonymously();
+      if(error){
+        setStatus('s1','fail','Failed');
+        showOut('out1', { error: error.message });
+        return;
+      }
+      setStatus('s1','ok','Session created');
+      showOut('out1', { user_id: data.user?.id, session: !!data.session });
+    } catch(e){
+      setStatus('s1','fail','JS error');
+      showOut('out1', { error: String(e) });
+    }
+  }
+
+  async function step2(){
+    try{
+      const c = getClient(); if(!c) return;
+      const slug = document.getElementById('slug').value.trim();
+      const pin = document.getElementById('pin').value.trim();
+      setStatus('s2','pending','Running…');
+      const { data, error } = await c.rpc('verify_staff_pin', {
+        p_restaurant_slug: slug,
+        p_pin: pin
+      });
+      if(error){
+        setStatus('s2','fail','Failed');
+        showOut('out2', { error: error.message, hint: 'Did Step 1 run first? Is the PIN/slug correct?' });
+        return;
+      }
+      setStatus('s2','ok','PIN verified & linked');
+      showOut('out2', data);
+    } catch(e){
+      setStatus('s2','fail','JS error');
+      showOut('out2', { error: String(e) });
+    }
+  }
+
+  async function step3(){
+    try{
+      const c = getClient(); if(!c) return;
+      setStatus('s3','pending','Running…');
+      const { data, error } = await c.from('restaurants').select('*');
+      if(error){
+        setStatus('s3','fail','Failed');
+        showOut('out3', { error: error.message });
+        return;
+      }
+      if(data.length === 1){
+        setStatus('s3','ok', `Correct — 1 row (${data[0].name})`);
+      } else if(data.length === 0){
+        setStatus('s3','fail', 'Returned 0 rows — link from Step 2 did not take');
+      } else {
+        setStatus('s3','fail', `Returned ${data.length} rows — RLS not scoping correctly`);
+      }
+      showOut('out3', data);
+    } catch(e){
+      setStatus('s3','fail','JS error');
+      showOut('out3', { error: String(e) });
+    }
+  }
+</script>
+</body>
+</html>
