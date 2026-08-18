@@ -150,6 +150,9 @@ app.post('/pair', async (req, res) => {
   }
 });
 
+// In-memory idempotency cache for order_request_id (60s TTL)
+const recentRequests = new Map();
+
 // 3. POST /orders — Waiter submits order over local WiFi
 app.post('/orders', (req, res) => {
   const pairing = hubConfig.getPairingInfo();
@@ -162,13 +165,32 @@ app.post('/orders', (req, res) => {
     return res.status(400).json({ error: 'Order must contain at least 1 item.' });
   }
 
-  // Step 1: Assign ticket number & save locally
+  // Idempotency check: if order_request_id seen within 60s, return original ticket immediately
+  const reqId = orderData.order_request_id || orderData.requestId;
+  if (reqId && recentRequests.has(reqId)) {
+    console.log(`⚡ Idempotent hit: duplicate request_id '${reqId}' received. Returning original ticket.`);
+    const existingTicket = recentRequests.get(reqId);
+    return res.status(200).json({
+      success: true,
+      duplicate: true,
+      message: 'Duplicate order request received; returning original ticket',
+      ticket: existingTicket
+    });
+  }
+
+  // Step 1: Assign ticket number & update memory store
   const newTicket = ticketStore.addTicket(orderData, pairing.restaurant_id);
 
-  // Step 2: Instantly push ticket to all connected Kitchen Display WS clients over LAN
+  // Step 2: Instantly push ticket to all connected Kitchen Display WS clients over LAN BEFORE disk write
   broadcast('NEW_ORDER', newTicket);
 
-  // Step 3: Asynchronously trigger background cloud sync (does not block HTTP response)
+  // Store in idempotency cache for 60 seconds
+  if (reqId) {
+    recentRequests.set(reqId, newTicket);
+    setTimeout(() => recentRequests.delete(reqId), 60000);
+  }
+
+  // Step 3: Asynchronously trigger background cloud sync
   syncQueue.enqueueTicket(newTicket);
 
   // Immediate success response to waiter handset
@@ -335,6 +357,36 @@ const distPath = path.join(__dirname, '../dist');
 if (fs.existsSync(distPath)) {
   app.use(express.static(distPath));
 }
+
+// 10. GET /dashboard-data — Operational metrics, active & completed tickets, daily totals
+app.get('/dashboard-data', (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const liveTables = getLiveTables(pairing.restaurant_id);
+  const allTickets = ticketStore.getAllTickets(pairing.restaurant_id);
+  const activeTickets = allTickets.filter(t => t.status === 'in_progress' || t.status === 'ready');
+  const completedTickets = allTickets.filter(t => t.status === 'completed' || t.status === 'billed');
+  const runningTotal = completedTickets.reduce((sum, t) => sum + (Number(t.total_amount) || 0), 0);
+
+  res.json({
+    restaurant: pairing,
+    tables: liveTables,
+    active_tickets: activeTickets,
+    completed_tickets: completedTickets,
+    running_total: runningTotal,
+    connected_devices: connectedClients.size,
+    sync_status: syncQueue.getStatus(),
+    timestamp: Date.now()
+  });
+});
+
+// Dedicated route for Hub Dashboard
+app.get('/dashboard', (req, res) => {
+  const dashboardHtml = path.join(distPath, 'dashboard.html');
+  if (fs.existsSync(dashboardHtml)) {
+    return res.sendFile(dashboardHtml);
+  }
+  res.sendFile(path.join(distPath, 'index.html'));
+});
 
 // Dedicated route for Waiter App PWA
 app.get('/waiter', (req, res) => {

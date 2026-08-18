@@ -73,14 +73,11 @@ class TicketStore {
   }
 
   saveTickets(ticketsList) {
-    try {
-      fs.writeFileSync(TICKETS_FILE, JSON.stringify(ticketsList, null, 2), 'utf-8');
-      this.tickets = ticketsList;
-      return true;
-    } catch (err) {
-      console.error('❌ Failed to save tickets.json:', err);
-      return false;
-    }
+    this.tickets = ticketsList;
+    // Non-blocking async write to disk
+    fs.promises.writeFile(TICKETS_FILE, JSON.stringify(ticketsList, null, 2), 'utf-8')
+      .catch(err => console.error('❌ Async save tickets error:', err));
+    return true;
   }
 
   getNextTicketNumber(restaurantId) {
@@ -177,4 +174,5 @@ class TicketStore {
 }
 
 export const ticketStore = new TicketStore();
+
 

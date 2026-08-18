@@ -9,6 +9,7 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         waiter: resolve(__dirname, 'waiter.html'),
+        dashboard: resolve(__dirname, 'dashboard.html'),
       },
     },
   },

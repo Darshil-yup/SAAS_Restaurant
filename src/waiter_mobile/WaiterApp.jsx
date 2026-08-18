@@ -73,14 +73,16 @@ export const WaiterApp = () => {
     }
   }, [hubUrl]);
 
-  // 2. Periodic 5s Health Check (Bug 2 Fix) & Auto Re-Sync on Reconnect
+  const pingFailuresRef = useRef(0);
+
+  // 2. Periodic 5s Health Check & Auto Re-Sync on Reconnect
   const checkHubConnection = useCallback(async (targetUrl = hubUrl) => {
     setIsTestingConn(true);
     setPairError('');
     const cleanUrl = targetUrl.replace(/\/+$/, '');
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000); // 3s strict timeout
+      const timeoutId = setTimeout(() => controller.abort(), 4000); // 4s timeout
 
       const res = await fetch(`${cleanUrl}/pairing-info`, { signal: controller.signal });
       clearTimeout(timeoutId);
@@ -88,6 +90,7 @@ export const WaiterApp = () => {
       if (res.ok) {
         const data = await res.json();
         setHubInfo(data);
+        pingFailuresRef.current = 0; // Reset fail counter on success
         
         // Auto Re-Sync check: if previously disconnected and now connected again
         if (!wasConnectedRef.current) {
@@ -101,8 +104,12 @@ export const WaiterApp = () => {
         return true;
       }
     } catch (err) {
-      wasConnectedRef.current = false;
-      setHubConnected(false);
+      pingFailuresRef.current += 1;
+      // Re-tuned: require 2 consecutive missed pings before declaring offline state
+      if (pingFailuresRef.current >= 2) {
+        wasConnectedRef.current = false;
+        setHubConnected(false);
+      }
     }
     setIsTestingConn(false);
     return false;
@@ -239,15 +246,8 @@ export const WaiterApp = () => {
   ];
 
   return (
-    <div className="phone-bezel" style={{ width: '100%', maxWidth: '420px', margin: '0 auto' }}>
-      {/* Camera Notch */}
-      <div className="phone-notch">
-        <div className="phone-notch-dot" />
-        <div className="phone-notch-cam" />
-        <div className="phone-notch-dot" />
-      </div>
-
-      <div className="phone-screen">
+    <div style={{ width: '100%', minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--color-canvas)' }}>
+      <div>
         {/* iOS Status Bar */}
         <div style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',

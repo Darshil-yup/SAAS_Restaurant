@@ -8,6 +8,7 @@ export const OrderDraftDrawer = ({ selectedTableId, draftItems, onRemoveItem, on
   const [sent, setSent] = useState(false);
   const [sentTicket, setSentTicket] = useState(null);
   const [sendError, setSendError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const currency = currentRestaurant?.currency || '₹';
   const table = tables.find(t => t.id === selectedTableId);
@@ -22,11 +23,15 @@ export const OrderDraftDrawer = ({ selectedTableId, draftItems, onRemoveItem, on
   const hasItems = draftMenu.length > 0;
 
   const handleSend = async () => {
-    if (!hasItems || !selectedTableId) return;
+    if (!hasItems || !selectedTableId || isSubmitting || !hubConnected) return;
     setSendError('');
+    setIsSubmitting(true);
 
     const targetHub = (hubUrl || 'http://localhost:4000').replace(/\/+$/, '');
+    const orderRequestId = 'req_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+
     const orderPayload = {
+      order_request_id: orderRequestId,
       table_id: selectedTableId,
       table_name: table ? table.name : `Table ${selectedTableId}`,
       items: draftMenu.map(i => ({ id: i.id, name: i.name, qty: i.qty, price: i.price })),
@@ -58,6 +63,8 @@ export const OrderDraftDrawer = ({ selectedTableId, draftItems, onRemoveItem, on
       }
     } catch (err) {
       setSendError(`Hub unreachable at ${targetHub}. Check WiFi network.`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -179,12 +186,12 @@ export const OrderDraftDrawer = ({ selectedTableId, draftItems, onRemoveItem, on
           {/* Send Button */}
           <button
             onClick={handleSend}
-            disabled={!hasItems || !hubConnected}
+            disabled={!hasItems || !hubConnected || isSubmitting}
             className="btn btn-primary"
-            style={{ width: '100%', marginTop: '6px', opacity: (!hasItems || !hubConnected) ? 0.5 : 1, cursor: (!hasItems || !hubConnected) ? 'not-allowed' : 'pointer' }}
+            style={{ width: '100%', marginTop: '6px', opacity: (!hasItems || !hubConnected || isSubmitting) ? 0.5 : 1, cursor: (!hasItems || !hubConnected || isSubmitting) ? 'not-allowed' : 'pointer' }}
           >
             <Send size={16} />
-            {hubConnected ? 'Send to Kitchen KDS (LAN)' : 'Not Connected to Hub'}
+            {isSubmitting ? '⏳ Sending to Kitchen...' : (hubConnected ? 'Send to Kitchen KDS (LAN)' : 'Not Connected to Hub')}
           </button>
         </div>
       )}

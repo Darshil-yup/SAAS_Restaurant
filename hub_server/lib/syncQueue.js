@@ -35,15 +35,12 @@ class SyncQueue {
   }
 
   saveQueue(queueList) {
-    try {
-      fs.writeFileSync(QUEUE_FILE, JSON.stringify(queueList, null, 2), 'utf-8');
-      this.queue = queueList;
-      this.notifyStatusChange();
-      return true;
-    } catch (err) {
-      console.error('❌ Failed to save sync_queue.json:', err);
-      return false;
-    }
+    this.queue = queueList;
+    this.notifyStatusChange();
+    // Non-blocking async write to disk
+    fs.promises.writeFile(QUEUE_FILE, JSON.stringify(queueList, null, 2), 'utf-8')
+      .catch(err => console.error('❌ Async save queue error:', err));
+    return true;
   }
 
   onStatusChange(callback) {

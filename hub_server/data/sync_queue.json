@@ -171,5 +171,386 @@
     },
     "queued_at": "2026-08-17T16:31:51.058Z",
     "attempts": 0
+  },
+  {
+    "queue_id": "q_1787055688064_h6iz",
+    "type": "CREATE_ORDER",
+    "ticket": {
+      "id": "t_1787055688062_v8h32",
+      "ticket_number": 106,
+      "restaurant_id": "11111111-1111-1111-1111-111111111111",
+      "table_id": 6,
+      "table_name": "T6",
+      "items": [
+        {
+          "id": "m1",
+          "name": "Paneer Tikka",
+          "qty": 1,
+          "price": 230
+        },
+        {
+          "id": "m2",
+          "name": "Chicken Sukka",
+          "qty": 1,
+          "price": 220
+        },
+        {
+          "id": "m3",
+          "name": "Veg Manchow Soup",
+          "qty": 1,
+          "price": 143
+        },
+        {
+          "id": "m4",
+          "name": "Chicken Lollipop",
+          "qty": 1,
+          "price": 240
+        }
+      ],
+      "total_amount": 833,
+      "status": "in_progress",
+      "note": "",
+      "created_by_waiter": "Waiter Handset (PWA)",
+      "synced_to_cloud": false,
+      "created_at": "2026-08-18T12:21:28.062Z",
+      "updated_at": "2026-08-18T12:21:28.062Z"
+    },
+    "queued_at": "2026-08-18T12:21:28.064Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787055787647_8wig",
+    "type": "UPDATE_STATUS",
+    "payload": {
+      "ticketId": 106,
+      "status": "ready",
+      "restaurantId": "11111111-1111-1111-1111-111111111111"
+    },
+    "queued_at": "2026-08-18T12:23:07.647Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787055802755_mydw",
+    "type": "CREATE_ORDER",
+    "ticket": {
+      "id": "t_1787055802754_ny90r",
+      "ticket_number": 107,
+      "restaurant_id": "11111111-1111-1111-1111-111111111111",
+      "table_id": 8,
+      "table_name": "T8",
+      "items": [
+        {
+          "id": "m1",
+          "name": "Paneer Tikka",
+          "qty": 1,
+          "price": 230
+        },
+        {
+          "id": "m2",
+          "name": "Chicken Sukka",
+          "qty": 1,
+          "price": 220
+        },
+        {
+          "id": "m3",
+          "name": "Veg Manchow Soup",
+          "qty": 1,
+          "price": 143
+        },
+        {
+          "id": "m4",
+          "name": "Chicken Lollipop",
+          "qty": 1,
+          "price": 240
+        }
+      ],
+      "total_amount": 833,
+      "status": "in_progress",
+      "note": "",
+      "created_by_waiter": "Waiter Handset (PWA)",
+      "synced_to_cloud": false,
+      "created_at": "2026-08-18T12:23:22.754Z",
+      "updated_at": "2026-08-18T12:23:22.754Z"
+    },
+    "queued_at": "2026-08-18T12:23:22.755Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787055802770_z4ze",
+    "type": "CREATE_ORDER",
+    "ticket": {
+      "id": "t_1787055802769_k9ysx",
+      "ticket_number": 108,
+      "restaurant_id": "11111111-1111-1111-1111-111111111111",
+      "table_id": 8,
+      "table_name": "T8",
+      "items": [
+        {
+          "id": "m1",
+          "name": "Paneer Tikka",
+          "qty": 1,
+          "price": 230
+        },
+        {
+          "id": "m2",
+          "name": "Chicken Sukka",
+          "qty": 1,
+          "price": 220
+        },
+        {
+          "id": "m3",
+          "name": "Veg Manchow Soup",
+          "qty": 1,
+          "price": 143
+        },
+        {
+          "id": "m4",
+          "name": "Chicken Lollipop",
+          "qty": 1,
+          "price": 240
+        }
+      ],
+      "total_amount": 833,
+      "status": "in_progress",
+      "note": "",
+      "created_by_waiter": "Waiter Handset (PWA)",
+      "synced_to_cloud": false,
+      "created_at": "2026-08-18T12:23:22.769Z",
+      "updated_at": "2026-08-18T12:23:22.769Z"
+    },
+    "queued_at": "2026-08-18T12:23:22.770Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787055802791_7mw2",
+    "type": "CREATE_ORDER",
+    "ticket": {
+      "id": "t_1787055802790_n5874",
+      "ticket_number": 109,
+      "restaurant_id": "11111111-1111-1111-1111-111111111111",
+      "table_id": 8,
+      "table_name": "T8",
+      "items": [
+        {
+          "id": "m1",
+          "name": "Paneer Tikka",
+          "qty": 1,
+          "price": 230
+        },
+        {
+          "id": "m2",
+          "name": "Chicken Sukka",
+          "qty": 1,
+          "price": 220
+        },
+        {
+          "id": "m3",
+          "name": "Veg Manchow Soup",
+          "qty": 1,
+          "price": 143
+        },
+        {
+          "id": "m4",
+          "name": "Chicken Lollipop",
+          "qty": 1,
+          "price": 240
+        }
+      ],
+      "total_amount": 833,
+      "status": "in_progress",
+      "note": "",
+      "created_by_waiter": "Waiter Handset (PWA)",
+      "synced_to_cloud": false,
+      "created_at": "2026-08-18T12:23:22.790Z",
+      "updated_at": "2026-08-18T12:23:22.790Z"
+    },
+    "queued_at": "2026-08-18T12:23:22.791Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787055802806_gqgg",
+    "type": "CREATE_ORDER",
+    "ticket": {
+      "id": "t_1787055802805_y6csi",
+      "ticket_number": 110,
+      "restaurant_id": "11111111-1111-1111-1111-111111111111",
+      "table_id": 8,
+      "table_name": "T8",
+      "items": [
+        {
+          "id": "m1",
+          "name": "Paneer Tikka",
+          "qty": 1,
+          "price": 230
+        },
+        {
+          "id": "m2",
+          "name": "Chicken Sukka",
+          "qty": 1,
+          "price": 220
+        },
+        {
+          "id": "m3",
+          "name": "Veg Manchow Soup",
+          "qty": 1,
+          "price": 143
+        },
+        {
+          "id": "m4",
+          "name": "Chicken Lollipop",
+          "qty": 1,
+          "price": 240
+        }
+      ],
+      "total_amount": 833,
+      "status": "in_progress",
+      "note": "",
+      "created_by_waiter": "Waiter Handset (PWA)",
+      "synced_to_cloud": false,
+      "created_at": "2026-08-18T12:23:22.805Z",
+      "updated_at": "2026-08-18T12:23:22.805Z"
+    },
+    "queued_at": "2026-08-18T12:23:22.806Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787055802821_3yj0",
+    "type": "CREATE_ORDER",
+    "ticket": {
+      "id": "t_1787055802820_4z46r",
+      "ticket_number": 111,
+      "restaurant_id": "11111111-1111-1111-1111-111111111111",
+      "table_id": 8,
+      "table_name": "T8",
+      "items": [
+        {
+          "id": "m1",
+          "name": "Paneer Tikka",
+          "qty": 1,
+          "price": 230
+        },
+        {
+          "id": "m2",
+          "name": "Chicken Sukka",
+          "qty": 1,
+          "price": 220
+        },
+        {
+          "id": "m3",
+          "name": "Veg Manchow Soup",
+          "qty": 1,
+          "price": 143
+        },
+        {
+          "id": "m4",
+          "name": "Chicken Lollipop",
+          "qty": 1,
+          "price": 240
+        }
+      ],
+      "total_amount": 833,
+      "status": "in_progress",
+      "note": "",
+      "created_by_waiter": "Waiter Handset (PWA)",
+      "synced_to_cloud": false,
+      "created_at": "2026-08-18T12:23:22.820Z",
+      "updated_at": "2026-08-18T12:23:22.820Z"
+    },
+    "queued_at": "2026-08-18T12:23:22.821Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787055818772_kuni",
+    "type": "UPDATE_STATUS",
+    "payload": {
+      "ticketId": 107,
+      "status": "ready",
+      "restaurantId": "11111111-1111-1111-1111-111111111111"
+    },
+    "queued_at": "2026-08-18T12:23:38.772Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787055824043_ojvq",
+    "type": "UPDATE_STATUS",
+    "payload": {
+      "ticketId": 108,
+      "status": "ready",
+      "restaurantId": "11111111-1111-1111-1111-111111111111"
+    },
+    "queued_at": "2026-08-18T12:23:44.043Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787055827088_ssbt",
+    "type": "UPDATE_STATUS",
+    "payload": {
+      "ticketId": 111,
+      "status": "ready",
+      "restaurantId": "11111111-1111-1111-1111-111111111111"
+    },
+    "queued_at": "2026-08-18T12:23:47.088Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787055830440_9nre",
+    "type": "UPDATE_STATUS",
+    "payload": {
+      "ticketId": 109,
+      "status": "ready",
+      "restaurantId": "11111111-1111-1111-1111-111111111111"
+    },
+    "queued_at": "2026-08-18T12:23:50.440Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787055835350_duuc",
+    "type": "UPDATE_STATUS",
+    "payload": {
+      "ticketId": 110,
+      "status": "ready",
+      "restaurantId": "11111111-1111-1111-1111-111111111111"
+    },
+    "queued_at": "2026-08-18T12:23:55.350Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787055842503_qtxy",
+    "type": "CREATE_ORDER",
+    "ticket": {
+      "id": "t_1787055842503_hlync",
+      "ticket_number": 112,
+      "restaurant_id": "11111111-1111-1111-1111-111111111111",
+      "table_id": 9,
+      "table_name": "T9",
+      "items": [
+        {
+          "id": "m4",
+          "name": "Chicken Lollipop",
+          "qty": 1,
+          "price": 240
+        }
+      ],
+      "total_amount": 240,
+      "status": "in_progress",
+      "note": "",
+      "created_by_waiter": "Waiter Handset (PWA)",
+      "synced_to_cloud": false,
+      "created_at": "2026-08-18T12:24:02.503Z",
+      "updated_at": "2026-08-18T12:24:02.503Z"
+    },
+    "queued_at": "2026-08-18T12:24:02.503Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787055848968_c92a",
+    "type": "UPDATE_STATUS",
+    "payload": {
+      "ticketId": 112,
+      "status": "ready",
+      "restaurantId": "11111111-1111-1111-1111-111111111111"
+    },
+    "queued_at": "2026-08-18T12:24:08.968Z",
+    "attempts": 0
   }
 ]
