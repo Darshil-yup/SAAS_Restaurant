@@ -98,53 +98,59 @@ class SyncQueue {
   }
 
   async processQueue() {
-    if (this.isSyncing) return;
+    if (this.isSyncing) {
+      return;
+    }
     this.isSyncing = true;
     this.notifyStatusChange();
 
     try {
-      // 1. Check connection state first
-      const online = await checkSupabaseConnection();
       const prevOnline = this.isOnline;
+      const queuedCount = this.queue.length;
+
+      // 1. Check connection state
+      const online = await checkSupabaseConnection().catch(() => false);
       this.isOnline = online;
 
       if (!online) {
-        if (prevOnline !== online) {
-          console.warn('⚡ Hub Offline: Cloud connection unavailable. Unsynced items queued locally.');
+        if (prevOnline !== false) {
+          console.warn(`[sync] ⚡ Hub Offline: Cloud connection unavailable. ${queuedCount} item(s) queued locally.`);
+        } else {
+          console.warn(`[sync] ⚡ Retry attempt: Cloud connection unavailable (${queuedCount} order(s) pending). Retrying in 12s...`);
         }
-        this.isSyncing = false;
-        this.notifyStatusChange();
         return;
       }
 
+      // 2. Reconnection detection: if previously offline and now online
       if (!prevOnline && online) {
-        console.log('🌐 Hub Online: Internet connectivity restored! Beginning background cloud sync...');
+        console.log(`[sync] ✅ Reconnected to cloud — draining ${queuedCount} queued item(s) to Supabase!`);
+      } else if (queuedCount > 0) {
+        console.log(`[sync] 🔄 Attempting cloud sync: ${queuedCount} order(s) pending in queue...`);
       }
 
-      if (!this.queue.length) {
-        this.isSyncing = false;
-        this.notifyStatusChange();
+      if (!queuedCount) {
         return;
       }
 
-      console.log(`🔄 Processing ${this.queue.length} queued cloud sync items...`);
-
+      // 3. Process queued items
       const remainingQueue = [...this.queue];
       const itemsToProcess = [...this.queue];
+      let syncedCount = 0;
 
       for (const item of itemsToProcess) {
         let success = false;
 
         if (item.type === 'CREATE_ORDER') {
-          success = await this.syncOrderToSupabase(item.ticket);
+          success = await this.syncOrderToSupabase(item.ticket).catch(() => false);
           if (success) {
             ticketStore.markTicketSynced(item.ticket.id);
           }
         } else if (item.type === 'UPDATE_STATUS') {
-          success = await this.syncStatusToSupabase(item.payload);
+          success = await this.syncStatusToSupabase(item.payload).catch(() => false);
         }
 
         if (success) {
+          syncedCount++;
           const idx = remainingQueue.findIndex(q => q.queue_id === item.queue_id);
           if (idx !== -1) {
             remainingQueue.splice(idx, 1);
@@ -152,13 +158,18 @@ class SyncQueue {
           this.lastSyncedAt = new Date().toISOString();
         } else {
           item.attempts = (item.attempts || 0) + 1;
+          console.warn(`[sync] ⚠️ Failed to sync item ${item.queue_id}. Will retry on next interval.`);
           break; // Stop loop on failure and retry on next interval
         }
       }
 
       this.saveQueue(remainingQueue);
+
+      if (syncedCount > 0) {
+        console.log(`[sync] 🎉 Successfully synced ${syncedCount} item(s) to cloud. ${remainingQueue.length} remaining.`);
+      }
     } catch (err) {
-      console.warn('⚠️ Error during sync process:', err.message);
+      console.error('[sync] ❌ Error during sync queue processing:', err.message || err);
     } finally {
       this.isSyncing = false;
       this.notifyStatusChange();
@@ -198,7 +209,7 @@ class SyncQueue {
       if (orderErr) {
         console.warn('⚠️ Supabase order insert notice:', orderErr.message);
         // If dummy client or RLS constraint fails, treat gracefully in demo mode
-        if (orderErr.message.includes('FetchError') || orderErr.message.includes('Failed to fetch')) {
+        if (orderErr.message.includes('FetchError') || orderErr.message.includes('Failed to fetch') || orderErr.message.includes('ENOTFOUND')) {
           return false;
         }
         return true; // Mark handled so queue isn't blocked on schema mismatch during demo
@@ -247,12 +258,20 @@ class SyncQueue {
 
   startSyncLoop(intervalMs = 12000) {
     console.log(`⏰ Hub Cloud Sync background retry loop active (every ${intervalMs / 1000}s)`);
-    // Run initial check
-    this.processQueue();
-    // Schedule interval loop
-    setInterval(() => {
-      this.processQueue();
-    }, intervalMs);
+
+    const runLoop = async () => {
+      try {
+        await this.processQueue();
+      } catch (err) {
+        console.error('[sync] ❌ Retry loop execution error:', err.message || err);
+      } finally {
+        // ALWAYS schedule next retry loop execution regardless of success or failure
+        setTimeout(runLoop, intervalMs);
+      }
+    };
+
+    // Run initial check immediately
+    runLoop();
   }
 }
 
