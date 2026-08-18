@@ -1,5 +1,27 @@
 [
   {
+    "id": "t_1787061561183_sgfsp",
+    "ticket_number": 118,
+    "restaurant_id": "11111111-1111-1111-1111-111111111111",
+    "table_id": 3,
+    "table_name": "T3",
+    "items": [
+      {
+        "id": "m4",
+        "name": "Chicken Lollipop",
+        "qty": 2,
+        "price": 240
+      }
+    ],
+    "total_amount": 480,
+    "status": "in_progress",
+    "note": "",
+    "created_by_waiter": "Waiter Handset (PWA)",
+    "synced_to_cloud": false,
+    "created_at": "2026-08-18T13:59:21.183Z",
+    "updated_at": "2026-08-18T13:59:21.183Z"
+  },
+  {
     "id": "t_1787059028124_v9x6r",
     "ticket_number": 117,
     "restaurant_id": "11111111-1111-1111-1111-111111111111",
@@ -20,12 +42,12 @@
       }
     ],
     "total_amount": 1420,
-    "status": "in_progress",
+    "status": "ready",
     "note": "",
     "created_by_waiter": "Waiter Handset (PWA)",
     "synced_to_cloud": false,
     "created_at": "2026-08-18T13:17:08.124Z",
-    "updated_at": "2026-08-18T13:17:08.124Z"
+    "updated_at": "2026-08-18T13:59:09.854Z"
   },
   {
     "id": "t_1787059018165_cq55u",
@@ -42,12 +64,12 @@
       }
     ],
     "total_amount": 1150,
-    "status": "in_progress",
+    "status": "ready",
     "note": "",
     "created_by_waiter": "Waiter Handset (PWA)",
     "synced_to_cloud": false,
     "created_at": "2026-08-18T13:16:58.165Z",
-    "updated_at": "2026-08-18T13:16:58.165Z"
+    "updated_at": "2026-08-18T13:59:27.428Z"
   },
   {
     "id": "t_1787058994802_qjf8c",
@@ -70,12 +92,12 @@
       }
     ],
     "total_amount": 383,
-    "status": "in_progress",
+    "status": "ready",
     "note": "",
     "created_by_waiter": "Waiter Handset (PWA)",
     "synced_to_cloud": false,
     "created_at": "2026-08-18T13:16:34.802Z",
-    "updated_at": "2026-08-18T13:16:34.802Z"
+    "updated_at": "2026-08-18T13:59:13.351Z"
   },
   {
     "id": "t_1787057667586_7coqp",

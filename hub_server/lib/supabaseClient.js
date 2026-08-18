@@ -12,13 +12,23 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 
 export const checkSupabaseConnection = async () => {
   if (SUPABASE_URL.includes('example.supabase.co')) {
-    return false;
+    return { online: false, isNetworkError: true, error: { message: 'Default unconfigured Supabase URL' } };
   }
   try {
-    const { error } = await supabase.from('restaurants').select('id').limit(1);
-    return !error;
+    // Ping Supabase REST endpoint to verify network-level connectivity
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/`, {
+      method: 'GET',
+      headers: { 'apikey': SUPABASE_KEY }
+    });
+    // Any HTTP status response (200, 400, 401, 403, 404, etc.) confirms network is ONLINE
+    return { online: true, status: response.status };
   } catch (err) {
-    return false;
+    // True network errors: ENOTFOUND, ECONNREFUSED, fetch failed
+    return {
+      online: false,
+      isNetworkError: true,
+      error: { message: err.message || 'Fetch failed', code: err.code || err.name || 'unknown' }
+    };
   }
 };
 

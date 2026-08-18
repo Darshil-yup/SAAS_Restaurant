@@ -22,5 +22,6 @@ For **every code modification or feature addition**, the assistant/developer **M
 
 | Date & Timestamp | Report Document | Primary Scope / Feature | Status |
 |---|---|---|---|
+| 2026-08-18T19:51:00+05:30 | [`report_2026-08-18_195100_unmask_supabase_sync_errors.md`](./reports/report_2026-08-18_195100_unmask_supabase_sync_errors.md) | Network vs RLS/Auth Error Separation, Pre-Sync Auth Session Audit Logging, Unmasked Supabase Payload Error Output | ✅ VERIFIED & COMMITTED |
 | 2026-08-18T19:22:00+05:30 | [`report_2026-08-18_192200_sync_retry_loop_fix.md`](./reports/report_2026-08-18_192200_sync_retry_loop_fix.md) | Background Cloud Sync Perpetual Retry Rescheduling Loop (`startSyncLoop`) & Explicit Terminal Attempt/Recovery Logging | ✅ VERIFIED & COMMITTED |
 | 2026-08-18T18:31:12+05:30 | [`report_2026-08-18_hub_performance_idempotency_dashboard.md`](./reports/report_2026-08-18_hub_performance_idempotency_dashboard.md) | Async non-blocking I/O, Request Idempotency (`order_request_id`), Live Hub Operational Dashboard (`/dashboard`), & Full-Bleed PWA UI Cleanup | ✅ VERIFIED & COMMITTED |

@@ -109,30 +109,48 @@ class SyncQueue {
       const queuedCount = this.queue.length;
 
       // 1. Check connection state
-      const online = await checkSupabaseConnection().catch(() => false);
+      const connResult = await checkSupabaseConnection();
+      const online = connResult.online;
       this.isOnline = online;
 
       if (!online) {
         if (prevOnline !== false) {
-          console.warn(`[sync] ⚡ Hub Offline: Cloud connection unavailable. ${queuedCount} item(s) queued locally.`);
+          console.warn(`[sync] ⚡ Hub Offline (Network Error): ${connResult.error?.message || 'Failed to fetch'}. ${queuedCount} item(s) queued locally.`);
         } else {
-          console.warn(`[sync] ⚡ Retry attempt: Cloud connection unavailable (${queuedCount} order(s) pending). Retrying in 12s...`);
+          console.warn(`[sync] ⚡ Retry attempt: Network connection unavailable (${queuedCount} order(s) pending). Retrying in 12s...`);
         }
         return;
       }
 
-      // 2. Reconnection detection: if previously offline and now online
+      // Reconnection detection: if previously offline and now online
       if (!prevOnline && online) {
-        console.log(`[sync] ✅ Reconnected to cloud — draining ${queuedCount} queued item(s) to Supabase!`);
-      } else if (queuedCount > 0) {
-        console.log(`[sync] 🔄 Attempting cloud sync: ${queuedCount} order(s) pending in queue...`);
+        console.log(`[sync] 🌐 Hub Online: Internet connection verified! Draining sync queue (${queuedCount} items queued)...`);
       }
 
       if (!queuedCount) {
         return;
       }
 
+      // 2. Pre-sync Auth Session & Tenant ID Audit Log
+      const pairing = hubConfig.getPairingInfo();
+      let sessionUser = null;
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        sessionUser = session?.user || null;
+      } catch (err) {}
+
+      console.log(`[sync] 🔐 Pre-sync Auth Check: Auth UID=${sessionUser?.id || 'NONE'}, Restaurant ID=${pairing.restaurant_id || 'NONE'}, Paired=${pairing.paired}`);
+
+      // Auto re-authenticate as kitchen staff if session is missing but hub is paired
+      if (pairing.paired && pairing.restaurant_id && !sessionUser) {
+        console.log(`[sync] 🔑 Auth session missing. Attempting re-authentication for kitchen staff (Tenant: ${pairing.restaurant_id})...`);
+        const authRes = await authenticateHubStaff(pairing.restaurant_id);
+        console.log(`[sync] 🔑 Auth re-authentication result:`, authRes);
+      }
+
       // 3. Process queued items
+      console.log(`[sync] 🔄 Processing ${queuedCount} queued cloud sync item(s)...`);
+
       const remainingQueue = [...this.queue];
       const itemsToProcess = [...this.queue];
       let syncedCount = 0;
@@ -141,12 +159,26 @@ class SyncQueue {
         let success = false;
 
         if (item.type === 'CREATE_ORDER') {
-          success = await this.syncOrderToSupabase(item.ticket).catch(() => false);
+          success = await this.syncOrderToSupabase(item.ticket).catch((err) => {
+            console.error('[sync] ❌ Sync order exception:', {
+              message: err.message,
+              code: err.code || 'unknown',
+              stack: err.stack
+            });
+            return false;
+          });
+
           if (success) {
             ticketStore.markTicketSynced(item.ticket.id);
           }
         } else if (item.type === 'UPDATE_STATUS') {
-          success = await this.syncStatusToSupabase(item.payload).catch(() => false);
+          success = await this.syncStatusToSupabase(item.payload).catch((err) => {
+            console.error('[sync] ❌ Sync status exception:', {
+              message: err.message,
+              code: err.code || 'unknown'
+            });
+            return false;
+          });
         }
 
         if (success) {
@@ -158,7 +190,7 @@ class SyncQueue {
           this.lastSyncedAt = new Date().toISOString();
         } else {
           item.attempts = (item.attempts || 0) + 1;
-          console.warn(`[sync] ⚠️ Failed to sync item ${item.queue_id}. Will retry on next interval.`);
+          console.warn(`[sync] ⚠️ Item ${item.queue_id} (Ticket #${item.ticket?.ticket_number || item.payload?.ticketId}) failed sync. Will retry on next interval.`);
           break; // Stop loop on failure and retry on next interval
         }
       }
@@ -169,7 +201,11 @@ class SyncQueue {
         console.log(`[sync] 🎉 Successfully synced ${syncedCount} item(s) to cloud. ${remainingQueue.length} remaining.`);
       }
     } catch (err) {
-      console.error('[sync] ❌ Error during sync queue processing:', err.message || err);
+      console.error('[sync] ❌ Error during sync queue processing:', {
+        message: err.message,
+        code: err.code || err.name || 'unknown',
+        stack: err.stack
+      });
     } finally {
       this.isSyncing = false;
       this.notifyStatusChange();
@@ -178,12 +214,9 @@ class SyncQueue {
 
   async syncOrderToSupabase(ticket) {
     try {
-      // Clean up UUIDs for table_id / restaurant_id if needed
       const isUUID = (str) => typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-      
       const restId = isUUID(ticket.restaurant_id) ? ticket.restaurant_id : '11111111-1111-1111-1111-111111111111';
 
-      // 1. Insert order record
       const orderRecord = {
         restaurant_id: restId,
         table_name: ticket.table_name || 'T1',
@@ -200,6 +233,7 @@ class SyncQueue {
         orderRecord.table_id = ticket.table_id;
       }
 
+      // 1. Insert order record
       const { data: insertedOrder, error: orderErr } = await supabase
         .from('orders')
         .insert(orderRecord)
@@ -207,12 +241,15 @@ class SyncQueue {
         .single();
 
       if (orderErr) {
-        console.warn('⚠️ Supabase order insert notice:', orderErr.message);
-        // If dummy client or RLS constraint fails, treat gracefully in demo mode
-        if (orderErr.message.includes('FetchError') || orderErr.message.includes('Failed to fetch') || orderErr.message.includes('ENOTFOUND')) {
-          return false;
-        }
-        return true; // Mark handled so queue isn't blocked on schema mismatch during demo
+        console.error('[sync] ❌ Supabase Order Insert Failed:', {
+          message: orderErr.message,
+          code: orderErr.code || 'unknown',
+          status: orderErr.status || 'unknown',
+          details: orderErr.details || orderErr.hint || null,
+          ticket_number: ticket.ticket_number,
+          restaurant_id: restId
+        });
+        return false;
       }
 
       const dbOrderId = insertedOrder.id;
@@ -226,13 +263,25 @@ class SyncQueue {
           price: Number(item.price) || 0
         }));
 
-        await supabase.from('order_items').insert(itemRecords);
+        const { error: itemsErr } = await supabase.from('order_items').insert(itemRecords);
+        if (itemsErr) {
+          console.error('[sync] ❌ Supabase Order Items Insert Failed:', {
+            message: itemsErr.message,
+            code: itemsErr.code || 'unknown',
+            details: itemsErr.details || itemsErr.hint || null,
+            ticket_number: ticket.ticket_number
+          });
+          return false;
+        }
       }
 
-      console.log(`✅ Order Ticket #${ticket.ticket_number} synced to Supabase successfully.`);
+      console.log(`[sync] ✅ Order Ticket #${ticket.ticket_number} synced to Supabase successfully.`);
       return true;
     } catch (err) {
-      console.warn('⚠️ Order sync error:', err.message);
+      console.error('[sync] ❌ Sync order exception:', {
+        message: err.message,
+        code: err.code || err.name || 'unknown'
+      });
       return false;
     }
   }
@@ -245,13 +294,23 @@ class SyncQueue {
         .eq('ticket_number', Number(ticketId));
 
       if (error) {
-        console.warn('⚠️ Status sync update notice:', error.message);
+        console.error('[sync] ❌ Supabase Status Update Failed:', {
+          message: error.message,
+          code: error.code || 'unknown',
+          details: error.details || error.hint || null,
+          ticketId,
+          status
+        });
+        return false;
       } else {
-        console.log(`✅ Ticket #${ticketId} status updated to '${status}' on Supabase.`);
+        console.log(`[sync] ✅ Ticket #${ticketId} status updated to '${status}' on Supabase.`);
+        return true;
       }
-      return true;
     } catch (err) {
-      console.warn('⚠️ Status update sync error:', err.message);
+      console.error('[sync] ❌ Sync status exception:', {
+        message: err.message,
+        code: err.code || err.name || 'unknown'
+      });
       return false;
     }
   }

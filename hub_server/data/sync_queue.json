@@ -786,5 +786,66 @@
     },
     "queued_at": "2026-08-18T13:17:08.125Z",
     "attempts": 0
+  },
+  {
+    "queue_id": "q_1787061549855_8kpy",
+    "type": "UPDATE_STATUS",
+    "payload": {
+      "ticketId": 117,
+      "status": "ready",
+      "restaurantId": "11111111-1111-1111-1111-111111111111"
+    },
+    "queued_at": "2026-08-18T13:59:09.855Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787061553352_mtw2",
+    "type": "UPDATE_STATUS",
+    "payload": {
+      "ticketId": 115,
+      "status": "ready",
+      "restaurantId": "11111111-1111-1111-1111-111111111111"
+    },
+    "queued_at": "2026-08-18T13:59:13.352Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787061561184_egeh",
+    "type": "CREATE_ORDER",
+    "ticket": {
+      "id": "t_1787061561183_sgfsp",
+      "ticket_number": 118,
+      "restaurant_id": "11111111-1111-1111-1111-111111111111",
+      "table_id": 3,
+      "table_name": "T3",
+      "items": [
+        {
+          "id": "m4",
+          "name": "Chicken Lollipop",
+          "qty": 2,
+          "price": 240
+        }
+      ],
+      "total_amount": 480,
+      "status": "in_progress",
+      "note": "",
+      "created_by_waiter": "Waiter Handset (PWA)",
+      "synced_to_cloud": false,
+      "created_at": "2026-08-18T13:59:21.183Z",
+      "updated_at": "2026-08-18T13:59:21.183Z"
+    },
+    "queued_at": "2026-08-18T13:59:21.184Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787061567429_kmoa",
+    "type": "UPDATE_STATUS",
+    "payload": {
+      "ticketId": 116,
+      "status": "ready",
+      "restaurantId": "11111111-1111-1111-1111-111111111111"
+    },
+    "queued_at": "2026-08-18T13:59:27.429Z",
+    "attempts": 0
   }
 ]
