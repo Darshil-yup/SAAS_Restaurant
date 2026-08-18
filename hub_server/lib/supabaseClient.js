@@ -6,9 +6,23 @@ dotenv.config();
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://example.supabase.co';
 const SUPABASE_KEY = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy';
 
+let inMemoryStorage = {};
+const customMemoryStorage = {
+  getItem: (key) => inMemoryStorage[key] || null,
+  setItem: (key, value) => { inMemoryStorage[key] = value; },
+  removeItem: (key) => { delete inMemoryStorage[key]; }
+};
+
 export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-  auth: { persistSession: false }
+  auth: {
+    persistSession: true,
+    storage: customMemoryStorage,
+    autoRefreshToken: true,
+    detectSessionInUrl: false
+  }
 });
+
+let isHubAuthenticated = false;
 
 export const checkSupabaseConnection = async () => {
   if (SUPABASE_URL.includes('example.supabase.co')) {
@@ -37,9 +51,17 @@ export const checkSupabaseConnection = async () => {
  * for the paired restaurant ID. Uses anonymous auth + staff_users row mapping.
  * Avoids service_role key to respect Supabase RLS policies.
  */
-export const authenticateHubStaff = async (restaurantId, kitchenPin = '9842') => {
+export const authenticateHubStaff = async (restaurantId, kitchenPin = '9842', force = false) => {
   if (!restaurantId || SUPABASE_URL.includes('example.supabase.co')) {
     return { success: false, reason: 'Offline or default Supabase URL' };
+  }
+
+  // If already authenticated and session is active, reuse existing session
+  if (isHubAuthenticated && !force) {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user) {
+      return { success: true, staff_id: 'cached', user_id: session.user.id };
+    }
   }
 
   try {
@@ -67,8 +89,9 @@ export const authenticateHubStaff = async (restaurantId, kitchenPin = '9842') =>
       .maybeSingle();
 
     if (!staffCheckErr && existingStaff) {
-      console.log(`🔐 Hub authenticated as kitchen staff member (Staff ID: ${existingStaff.id}, Tenant: ${existingStaff.restaurant_id})`);
-      return { success: true, staff: existingStaff };
+      console.log(`🔐 Hub authenticated as kitchen staff member (Staff ID: ${existingStaff.id}, Auth UID: ${userId})`);
+      isHubAuthenticated = true;
+      return { success: true, staff: existingStaff, user_id: userId };
     }
 
     // 3. Call provision_kitchen_staff RPC to handle pin_hash creation & user_id binding
@@ -90,15 +113,17 @@ export const authenticateHubStaff = async (restaurantId, kitchenPin = '9842') =>
         .maybeSingle();
 
       if (!updateErr && updatedStaff) {
-        console.log(`✅ Linked existing kitchen staff record to Hub session (Staff ID: ${updatedStaff.id})`);
-        return { success: true, staff: updatedStaff };
+        console.log(`✅ Linked existing kitchen staff record to Hub session (Staff ID: ${updatedStaff.id}, Auth UID: ${userId})`);
+        isHubAuthenticated = true;
+        return { success: true, staff: updatedStaff, user_id: userId };
       }
 
       return { success: false, error: rpcErr.message };
     }
 
-    console.log(`✅ Provisioned & bound dedicated 'kitchen' staff role for Hub (Staff ID: ${staffId}, User ID: ${userId})`);
-    return { success: true, staff_id: staffId };
+    console.log(`✅ Provisioned & bound dedicated 'kitchen' staff role for Hub (Staff ID: ${staffId}, Auth UID: ${userId})`);
+    isHubAuthenticated = true;
+    return { success: true, staff_id: staffId, user_id: userId };
   } catch (err) {
     console.warn('⚠️ Hub staff auth process error:', err.message);
     return { success: false, error: err.message };

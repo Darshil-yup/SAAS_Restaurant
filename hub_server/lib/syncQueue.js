@@ -215,6 +215,10 @@ class SyncQueue {
 
   async syncOrderToSupabase(ticket) {
     try {
+      // Pre-insert session sanity check requested
+      const { data: { user } } = await supabase.auth.getUser().catch(() => ({ data: {} }));
+      console.log('[sync] 🔑 About to insert into orders as auth.uid():', user?.id ?? 'NONE');
+
       const isUUID = (str) => typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
       const restId = isUUID(ticket.restaurant_id) ? ticket.restaurant_id : '11111111-1111-1111-1111-111111111111';
 
