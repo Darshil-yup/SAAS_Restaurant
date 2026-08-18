@@ -57,24 +57,33 @@ $$ LANGUAGE SQL STABLE SECURITY DEFINER;
 -- Dedicated RPC function to provision kitchen staff role machine identity
 CREATE OR REPLACE FUNCTION public.provision_kitchen_staff(
     p_restaurant_id UUID,
-    p_pin TEXT
+    p_pin TEXT,
+    p_user_id UUID DEFAULT auth.uid()
 )
 RETURNS UUID AS $$
 DECLARE
     existing_id UUID;
+    target_user_id UUID;
     new_id UUID;
 BEGIN
+    target_user_id := COALESCE(p_user_id, auth.uid());
+
     SELECT id INTO existing_id
     FROM public.staff_users
     WHERE restaurant_id = p_restaurant_id AND role = 'kitchen'
     LIMIT 1;
 
     IF existing_id IS NOT NULL THEN
+        IF target_user_id IS NOT NULL THEN
+            UPDATE public.staff_users
+            SET user_id = target_user_id
+            WHERE id = existing_id;
+        END IF;
         RETURN existing_id;
     END IF;
 
-    INSERT INTO public.staff_users (restaurant_id, full_name, role, pin_hash)
-    VALUES (p_restaurant_id, 'Kitchen Hub', 'kitchen', crypt(p_pin, gen_salt('bf')))
+    INSERT INTO public.staff_users (restaurant_id, user_id, full_name, role, pin_hash)
+    VALUES (p_restaurant_id, target_user_id, 'Kitchen Hub', 'kitchen', crypt(p_pin, gen_salt('bf')))
     RETURNING id INTO new_id;
 
     RETURN new_id;

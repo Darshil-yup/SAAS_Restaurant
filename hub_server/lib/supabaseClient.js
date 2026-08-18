@@ -71,10 +71,11 @@ export const authenticateHubStaff = async (restaurantId, kitchenPin = '9842') =>
       return { success: true, staff: existingStaff };
     }
 
-    // 3. Call provision_kitchen_staff RPC to handle pin_hash pgcrypto creation
+    // 3. Call provision_kitchen_staff RPC to handle pin_hash creation & user_id binding
     const { data: staffId, error: rpcErr } = await supabase.rpc('provision_kitchen_staff', {
       p_restaurant_id: restaurantId,
-      p_pin: kitchenPin
+      p_pin: kitchenPin,
+      p_user_id: userId
     });
 
     if (rpcErr) {
@@ -96,13 +97,7 @@ export const authenticateHubStaff = async (restaurantId, kitchenPin = '9842') =>
       return { success: false, error: rpcErr.message };
     }
 
-    // 4. Bind current user_id to the provisioned staff record
-    await supabase
-      .from('staff_users')
-      .update({ user_id: userId })
-      .eq('id', staffId);
-
-    console.log(`✅ Provisioned & bound dedicated 'kitchen' staff role for Hub (Staff ID: ${staffId})`);
+    console.log(`✅ Provisioned & bound dedicated 'kitchen' staff role for Hub (Staff ID: ${staffId}, User ID: ${userId})`);
     return { success: true, staff_id: staffId };
   } catch (err) {
     console.warn('⚠️ Hub staff auth process error:', err.message);
