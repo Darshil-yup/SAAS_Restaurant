@@ -847,5 +847,84 @@
     },
     "queued_at": "2026-08-18T13:59:27.429Z",
     "attempts": 0
+  },
+  {
+    "queue_id": "q_1787063032219_o125",
+    "type": "CREATE_ORDER",
+    "ticket": {
+      "id": "t_1787063032218_44f3q",
+      "ticket_number": 119,
+      "restaurant_id": "11111111-1111-1111-1111-111111111111",
+      "table_id": 5,
+      "table_name": "T5",
+      "items": [
+        {
+          "id": "m4",
+          "name": "Chicken Lollipop",
+          "qty": 3,
+          "price": 240
+        }
+      ],
+      "total_amount": 720,
+      "status": "in_progress",
+      "note": "",
+      "created_by_waiter": "Waiter Handset (PWA)",
+      "synced_to_cloud": false,
+      "created_at": "2026-08-18T14:23:52.218Z",
+      "updated_at": "2026-08-18T14:23:52.218Z"
+    },
+    "queued_at": "2026-08-18T14:23:52.219Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787063045925_wqpj",
+    "type": "CREATE_ORDER",
+    "ticket": {
+      "id": "t_1787063045924_2noue",
+      "ticket_number": 120,
+      "restaurant_id": "11111111-1111-1111-1111-111111111111",
+      "table_id": 8,
+      "table_name": "T8",
+      "items": [
+        {
+          "id": "m3",
+          "name": "Veg Manchow Soup",
+          "qty": 1,
+          "price": 143
+        },
+        {
+          "id": "m2",
+          "name": "Chicken Sukka",
+          "qty": 1,
+          "price": 220
+        },
+        {
+          "id": "m4",
+          "name": "Chicken Lollipop",
+          "qty": 3,
+          "price": 240
+        }
+      ],
+      "total_amount": 1083,
+      "status": "in_progress",
+      "note": "",
+      "created_by_waiter": "Waiter Handset (PWA)",
+      "synced_to_cloud": false,
+      "created_at": "2026-08-18T14:24:05.924Z",
+      "updated_at": "2026-08-18T14:24:05.924Z"
+    },
+    "queued_at": "2026-08-18T14:24:05.925Z",
+    "attempts": 0
+  },
+  {
+    "queue_id": "q_1787063056255_33ii",
+    "type": "UPDATE_STATUS",
+    "payload": {
+      "ticketId": 118,
+      "status": "ready",
+      "restaurantId": "11111111-1111-1111-1111-111111111111"
+    },
+    "queued_at": "2026-08-18T14:24:16.255Z",
+    "attempts": 0
   }
 ]

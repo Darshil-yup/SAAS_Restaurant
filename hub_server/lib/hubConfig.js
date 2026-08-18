@@ -54,6 +54,7 @@ class HubConfig {
       pairing_code: 'MJW-7492',
       slug: 'hotel-mejwani',
       city: 'Nagpur',
+      kitchen_pin: '9842',
       paired_at: new Date().toISOString()
     };
     this.saveConfig(defaultConfig);
@@ -73,6 +74,14 @@ class HubConfig {
 
   getPairingInfo() {
     return { ...this.config };
+  }
+
+  getKitchenPin() {
+    if (!this.config.kitchen_pin) {
+      this.config.kitchen_pin = '9842';
+      this.saveConfig(this.config);
+    }
+    return this.config.kitchen_pin;
   }
 
   async pairWithCode(code) {

@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS public.staff_users (
     user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
     full_name VARCHAR(150) NOT NULL,
     role VARCHAR(20) NOT NULL CHECK (role IN ('owner', 'manager', 'waiter', 'kitchen')),
-    pin_code VARCHAR(6),
+    pin_hash TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -53,6 +53,33 @@ RETURNS UUID AS $$
     WHERE user_id = auth.uid() 
     LIMIT 1;
 $$ LANGUAGE SQL STABLE SECURITY DEFINER;
+
+-- Dedicated RPC function to provision kitchen staff role machine identity
+CREATE OR REPLACE FUNCTION public.provision_kitchen_staff(
+    p_restaurant_id UUID,
+    p_pin TEXT
+)
+RETURNS UUID AS $$
+DECLARE
+    existing_id UUID;
+    new_id UUID;
+BEGIN
+    SELECT id INTO existing_id
+    FROM public.staff_users
+    WHERE restaurant_id = p_restaurant_id AND role = 'kitchen'
+    LIMIT 1;
+
+    IF existing_id IS NOT NULL THEN
+        RETURN existing_id;
+    END IF;
+
+    INSERT INTO public.staff_users (restaurant_id, full_name, role, pin_hash)
+    VALUES (p_restaurant_id, 'Kitchen Hub', 'kitchen', crypt(p_pin, gen_salt('bf')))
+    RETURNING id INTO new_id;
+
+    RETURN new_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- 4. FLOOR TABLES / LAYOUT (tables)
 CREATE TABLE IF NOT EXISTS public.tables (

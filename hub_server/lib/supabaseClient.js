@@ -37,7 +37,7 @@ export const checkSupabaseConnection = async () => {
  * for the paired restaurant ID. Uses anonymous auth + staff_users row mapping.
  * Avoids service_role key to respect Supabase RLS policies.
  */
-export const authenticateHubStaff = async (restaurantId) => {
+export const authenticateHubStaff = async (restaurantId, kitchenPin = '9842') => {
   if (!restaurantId || SUPABASE_URL.includes('example.supabase.co')) {
     return { success: false, reason: 'Offline or default Supabase URL' };
   }
@@ -71,26 +71,39 @@ export const authenticateHubStaff = async (restaurantId) => {
       return { success: true, staff: existingStaff };
     }
 
-    // 3. Create staff_users record for role = 'kitchen'
-    const { data: newStaff, error: insertErr } = await supabase
-      .from('staff_users')
-      .insert({
-        restaurant_id: restaurantId,
-        user_id: userId,
-        full_name: 'Kitchen Hub Server',
-        role: 'kitchen',
-        pin_code: '0000'
-      })
-      .select()
-      .single();
+    // 3. Call provision_kitchen_staff RPC to handle pin_hash pgcrypto creation
+    const { data: staffId, error: rpcErr } = await supabase.rpc('provision_kitchen_staff', {
+      p_restaurant_id: restaurantId,
+      p_pin: kitchenPin
+    });
 
-    if (insertErr) {
-      console.warn('⚠️ Could not insert staff_users row for hub kitchen role:', insertErr.message);
-      return { success: false, error: insertErr.message };
+    if (rpcErr) {
+      console.warn('⚠️ Could not provision kitchen staff role via RPC:', rpcErr.message);
+      // Fallback: Bind user_id to existing kitchen staff record if already present
+      const { data: updatedStaff, error: updateErr } = await supabase
+        .from('staff_users')
+        .update({ user_id: userId })
+        .eq('restaurant_id', restaurantId)
+        .eq('role', 'kitchen')
+        .select()
+        .maybeSingle();
+
+      if (!updateErr && updatedStaff) {
+        console.log(`✅ Linked existing kitchen staff record to Hub session (Staff ID: ${updatedStaff.id})`);
+        return { success: true, staff: updatedStaff };
+      }
+
+      return { success: false, error: rpcErr.message };
     }
 
-    console.log(`✅ Created & bound dedicated 'kitchen' staff role for Hub (Staff ID: ${newStaff.id})`);
-    return { success: true, staff: newStaff };
+    // 4. Bind current user_id to the provisioned staff record
+    await supabase
+      .from('staff_users')
+      .update({ user_id: userId })
+      .eq('id', staffId);
+
+    console.log(`✅ Provisioned & bound dedicated 'kitchen' staff role for Hub (Staff ID: ${staffId})`);
+    return { success: true, staff_id: staffId };
   } catch (err) {
     console.warn('⚠️ Hub staff auth process error:', err.message);
     return { success: false, error: err.message };

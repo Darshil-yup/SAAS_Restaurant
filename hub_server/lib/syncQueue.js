@@ -1,8 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { supabase, checkSupabaseConnection } from './supabaseClient.js';
+import { supabase, checkSupabaseConnection, authenticateHubStaff } from './supabaseClient.js';
 import { ticketStore } from './ticketStore.js';
+import { hubConfig } from './hubConfig.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
