@@ -1,5 +1,231 @@
 [
   {
+    "id": "t_1787150297593_m6jmn",
+    "ticket_number": 127,
+    "restaurant_id": "11111111-1111-1111-1111-111111111111",
+    "table_id": 5,
+    "table_name": "T5",
+    "items": [
+      {
+        "id": "m1",
+        "name": "Paneer Tikka",
+        "qty": 1,
+        "price": 230
+      },
+      {
+        "id": "m2",
+        "name": "Chicken Sukka",
+        "qty": 1,
+        "price": 220
+      },
+      {
+        "id": "m3",
+        "name": "Veg Manchow Soup",
+        "qty": 1,
+        "price": 143
+      }
+    ],
+    "total_amount": 593,
+    "status": "completed",
+    "note": "",
+    "created_by_waiter": "Waiter Handset (PWA)",
+    "synced_to_cloud": true,
+    "created_at": "2026-08-19T14:38:17.593Z",
+    "updated_at": "2026-08-19T14:43:11.557Z"
+  },
+  {
+    "id": "t_1787150014717_fx3kd",
+    "ticket_number": 126,
+    "restaurant_id": "11111111-1111-1111-1111-111111111111",
+    "table_id": 8,
+    "table_name": "T8",
+    "items": [
+      {
+        "id": "m1",
+        "name": "Paneer Tikka",
+        "qty": 1,
+        "price": 230
+      },
+      {
+        "id": "m2",
+        "name": "Chicken Sukka",
+        "qty": 1,
+        "price": 220
+      },
+      {
+        "id": "m3",
+        "name": "Veg Manchow Soup",
+        "qty": 1,
+        "price": 143
+      },
+      {
+        "id": "m4",
+        "name": "Chicken Lollipop",
+        "qty": 1,
+        "price": 240
+      },
+      {
+        "id": "m9",
+        "name": "Mutton Biryani",
+        "qty": 8,
+        "price": 320
+      },
+      {
+        "id": "m10",
+        "name": "Chicken Biryani",
+        "qty": 6,
+        "price": 260
+      }
+    ],
+    "total_amount": 4953,
+    "status": "completed",
+    "note": "",
+    "created_by_waiter": "Waiter Handset (PWA)",
+    "synced_to_cloud": true,
+    "created_at": "2026-08-19T14:33:34.717Z",
+    "updated_at": "2026-08-19T14:43:07.866Z"
+  },
+  {
+    "id": "t_1787149561279_eymtw",
+    "ticket_number": 125,
+    "restaurant_id": "11111111-1111-1111-1111-111111111111",
+    "table_id": 5,
+    "table_name": "T5",
+    "items": [
+      {
+        "id": "m2",
+        "name": "Chicken Sukka",
+        "qty": 6,
+        "price": 220
+      }
+    ],
+    "total_amount": 1320,
+    "status": "completed",
+    "note": "",
+    "created_by_waiter": "Waiter Handset (PWA)",
+    "synced_to_cloud": true,
+    "created_at": "2026-08-19T14:26:01.279Z",
+    "updated_at": "2026-08-19T14:43:11.557Z"
+  },
+  {
+    "id": "t_1787149480641_miv3n",
+    "ticket_number": 124,
+    "restaurant_id": "11111111-1111-1111-1111-111111111111",
+    "table_id": 5,
+    "table_name": "T5",
+    "items": [
+      {
+        "id": "m3",
+        "name": "Veg Manchow Soup",
+        "qty": 1,
+        "price": 143
+      },
+      {
+        "id": "m2",
+        "name": "Chicken Sukka",
+        "qty": 1,
+        "price": 220
+      },
+      {
+        "id": "m1",
+        "name": "Paneer Tikka",
+        "qty": 1,
+        "price": 230
+      },
+      {
+        "id": "m4",
+        "name": "Chicken Lollipop",
+        "qty": 1,
+        "price": 240
+      }
+    ],
+    "total_amount": 833,
+    "status": "completed",
+    "note": "",
+    "created_by_waiter": "Waiter Handset (PWA)",
+    "synced_to_cloud": true,
+    "created_at": "2026-08-19T14:24:40.641Z",
+    "updated_at": "2026-08-19T14:43:11.557Z"
+  },
+  {
+    "id": "t_1787147880594_7z0hp",
+    "ticket_number": 123,
+    "restaurant_id": "11111111-1111-1111-1111-111111111111",
+    "table_id": 4,
+    "table_name": "T4",
+    "items": [
+      {
+        "id": "m3",
+        "name": "Veg Manchow Soup",
+        "qty": 4,
+        "price": 143
+      },
+      {
+        "id": "m2",
+        "name": "Chicken Sukka",
+        "qty": 1,
+        "price": 220
+      }
+    ],
+    "total_amount": 792,
+    "status": "completed",
+    "note": "",
+    "created_by_waiter": "Waiter Handset (PWA)",
+    "synced_to_cloud": true,
+    "created_at": "2026-08-19T13:58:00.594Z",
+    "updated_at": "2026-08-19T13:58:52.748Z"
+  },
+  {
+    "id": "t_1787147854114_qkesi",
+    "ticket_number": 122,
+    "restaurant_id": "11111111-1111-1111-1111-111111111111",
+    "table_id": 5,
+    "table_name": "T5",
+    "items": [
+      {
+        "id": "m2",
+        "name": "Chicken Sukka",
+        "qty": 5,
+        "price": 220
+      }
+    ],
+    "total_amount": 1100,
+    "status": "completed",
+    "note": "",
+    "created_by_waiter": "Waiter Handset (PWA)",
+    "synced_to_cloud": true,
+    "created_at": "2026-08-19T13:57:34.114Z",
+    "updated_at": "2026-08-19T13:58:51.810Z"
+  },
+  {
+    "id": "t_1787147837783_fjh2n",
+    "ticket_number": 121,
+    "restaurant_id": "11111111-1111-1111-1111-111111111111",
+    "table_id": 6,
+    "table_name": "T6",
+    "items": [
+      {
+        "id": "m2",
+        "name": "Chicken Sukka",
+        "qty": 1,
+        "price": 220
+      },
+      {
+        "id": "m3",
+        "name": "Veg Manchow Soup",
+        "qty": 1,
+        "price": 143
+      }
+    ],
+    "total_amount": 363,
+    "status": "completed",
+    "note": "",
+    "created_by_waiter": "Waiter Handset (PWA)",
+    "synced_to_cloud": true,
+    "created_at": "2026-08-19T13:57:17.783Z",
+    "updated_at": "2026-08-19T13:58:51.132Z"
+  },
+  {
     "id": "t_1787063045924_2noue",
     "ticket_number": 120,
     "restaurant_id": "11111111-1111-1111-1111-111111111111",
@@ -26,12 +252,12 @@
       }
     ],
     "total_amount": 1083,
-    "status": "in_progress",
+    "status": "completed",
     "note": "",
     "created_by_waiter": "Waiter Handset (PWA)",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-18T14:24:05.924Z",
-    "updated_at": "2026-08-18T14:24:05.924Z"
+    "updated_at": "2026-08-19T13:58:08.736Z"
   },
   {
     "id": "t_1787063032218_44f3q",
@@ -51,9 +277,9 @@
     "status": "completed",
     "note": "",
     "created_by_waiter": "Waiter Handset (PWA)",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-18T14:23:52.218Z",
-    "updated_at": "2026-08-18T14:23:59.543Z"
+    "updated_at": "2026-08-18T16:55:26.233Z"
   },
   {
     "id": "t_1787061561183_sgfsp",
@@ -70,12 +296,12 @@
       }
     ],
     "total_amount": 480,
-    "status": "ready",
+    "status": "completed",
     "note": "",
     "created_by_waiter": "Waiter Handset (PWA)",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-18T13:59:21.183Z",
-    "updated_at": "2026-08-18T14:24:16.254Z"
+    "updated_at": "2026-08-19T13:56:55.747Z"
   },
   {
     "id": "t_1787059028124_v9x6r",
@@ -98,12 +324,12 @@
       }
     ],
     "total_amount": 1420,
-    "status": "ready",
+    "status": "completed",
     "note": "",
     "created_by_waiter": "Waiter Handset (PWA)",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-18T13:17:08.124Z",
-    "updated_at": "2026-08-18T13:59:09.854Z"
+    "updated_at": "2026-08-19T13:56:55.747Z"
   },
   {
     "id": "t_1787059018165_cq55u",
@@ -123,9 +349,9 @@
     "status": "completed",
     "note": "",
     "created_by_waiter": "Waiter Handset (PWA)",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-18T13:16:58.165Z",
-    "updated_at": "2026-08-18T14:23:59.543Z"
+    "updated_at": "2026-08-18T16:55:23.811Z"
   },
   {
     "id": "t_1787058994802_qjf8c",
@@ -148,12 +374,12 @@
       }
     ],
     "total_amount": 383,
-    "status": "ready",
+    "status": "completed",
     "note": "",
     "created_by_waiter": "Waiter Handset (PWA)",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-18T13:16:34.802Z",
-    "updated_at": "2026-08-18T13:59:13.351Z"
+    "updated_at": "2026-08-19T13:57:45.230Z"
   },
   {
     "id": "t_1787057667586_7coqp",
@@ -209,9 +435,9 @@
     "status": "completed",
     "note": "",
     "created_by_waiter": "Waiter Handset (PWA)",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-18T12:54:27.586Z",
-    "updated_at": "2026-08-18T12:55:15.349Z"
+    "updated_at": "2026-08-18T16:55:20.866Z"
   },
   {
     "id": "t_1787057500084_z9u19",
@@ -255,9 +481,9 @@
     "status": "completed",
     "note": "Extra spicey with less oil and no garnishing",
     "created_by_waiter": "Waiter Handset (PWA)",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-18T12:51:40.084Z",
-    "updated_at": "2026-08-18T12:55:04.080Z"
+    "updated_at": "2026-08-18T16:55:19.393Z"
   },
   {
     "id": "t_1787055842503_hlync",
@@ -277,9 +503,9 @@
     "status": "completed",
     "note": "",
     "created_by_waiter": "Waiter Handset (PWA)",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-18T12:24:02.503Z",
-    "updated_at": "2026-08-18T12:50:01.168Z"
+    "updated_at": "2026-08-18T16:55:18.436Z"
   },
   {
     "id": "t_1787055802820_4z46r",
@@ -317,9 +543,9 @@
     "status": "completed",
     "note": "",
     "created_by_waiter": "Waiter Handset (PWA)",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-18T12:23:22.820Z",
-    "updated_at": "2026-08-18T12:49:59.697Z"
+    "updated_at": "2026-08-18T16:55:16.600Z"
   },
   {
     "id": "t_1787055802805_y6csi",
@@ -357,9 +583,9 @@
     "status": "completed",
     "note": "",
     "created_by_waiter": "Waiter Handset (PWA)",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-18T12:23:22.805Z",
-    "updated_at": "2026-08-18T12:49:59.697Z"
+    "updated_at": "2026-08-18T16:55:15.893Z"
   },
   {
     "id": "t_1787055802790_n5874",
@@ -397,9 +623,9 @@
     "status": "completed",
     "note": "",
     "created_by_waiter": "Waiter Handset (PWA)",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-18T12:23:22.790Z",
-    "updated_at": "2026-08-18T12:49:59.697Z"
+    "updated_at": "2026-08-18T16:55:15.333Z"
   },
   {
     "id": "t_1787055802769_k9ysx",
@@ -437,9 +663,9 @@
     "status": "completed",
     "note": "",
     "created_by_waiter": "Waiter Handset (PWA)",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-18T12:23:22.769Z",
-    "updated_at": "2026-08-18T12:49:59.697Z"
+    "updated_at": "2026-08-18T16:55:14.803Z"
   },
   {
     "id": "t_1787055802754_ny90r",
@@ -477,9 +703,9 @@
     "status": "completed",
     "note": "",
     "created_by_waiter": "Waiter Handset (PWA)",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-18T12:23:22.754Z",
-    "updated_at": "2026-08-18T12:49:59.697Z"
+    "updated_at": "2026-08-18T16:55:14.069Z"
   },
   {
     "id": "t_1787055688062_v8h32",
@@ -517,9 +743,9 @@
     "status": "completed",
     "note": "",
     "created_by_waiter": "Waiter Handset (PWA)",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-18T12:21:28.062Z",
-    "updated_at": "2026-08-18T12:50:14.390Z"
+    "updated_at": "2026-08-18T16:55:13.172Z"
   },
   {
     "id": "t_1786982630457_42m0k",
@@ -563,9 +789,9 @@
     "status": "completed",
     "note": "Less oil extra spicy",
     "created_by_waiter": "Waiter Handset (PWA)",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-17T16:03:50.457Z",
-    "updated_at": "2026-08-18T12:50:13.885Z"
+    "updated_at": "2026-08-18T16:55:11.629Z"
   },
   {
     "id": "t_1786975639287_9ir3j",
@@ -591,9 +817,9 @@
     "status": "completed",
     "note": "Extra spicy, no cilantro",
     "created_by_waiter": "Phone Waiter 1",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-17T14:07:19.287Z",
-    "updated_at": "2026-08-18T12:50:13.885Z"
+    "updated_at": "2026-08-18T16:55:10.948Z"
   },
   {
     "id": "t_1786639798763_ut930",
@@ -617,9 +843,9 @@
     "status": "completed",
     "note": "Extra Raita",
     "created_by_waiter": "Test Waiter",
-    "synced_to_cloud": false,
+    "synced_to_cloud": true,
     "created_at": "2026-08-13T16:49:58.763Z",
-    "updated_at": "2026-08-18T12:50:13.885Z"
+    "updated_at": "2026-08-18T16:55:10.296Z"
   },
   {
     "id": "t_seed_101",

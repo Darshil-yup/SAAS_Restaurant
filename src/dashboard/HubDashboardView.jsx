@@ -3,6 +3,7 @@ import {
   Activity, Server, Wifi, WifiOff, Smartphone, Utensils, Clock,
   CheckCircle2, AlertTriangle, ShieldCheck, RefreshCw, LayoutGrid, DollarSign
 } from 'lucide-react';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 
 const LiveClock = () => {
   const [t, setT] = useState(new Date());
@@ -33,6 +34,7 @@ export const HubDashboardView = () => {
   const [hubData, setHubData] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [lastFetchErr, setLastFetchErr] = useState('');
+  const shouldReduceMotion = useReducedMotion();
 
   const fetchDashboardData = useCallback(async () => {
     try {
@@ -182,9 +184,16 @@ export const HubDashboardView = () => {
             <div className="typography-uppercase-tag" style={{ color: 'var(--color-muted)', marginBottom: '4px' }}>
               Today's Billed Sales
             </div>
-            <div className="typography-rating-display" style={{ color: 'var(--color-primary)' }}>
+            <motion.div
+              key={runningTotal}
+              initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -10 }}
+              animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+              transition={{ duration: 0.25 }}
+              className="typography-rating-display"
+              style={{ color: 'var(--color-primary)' }}
+            >
               {currency}{runningTotal}
-            </div>
+            </motion.div>
             <div className="typography-caption-sm" style={{ color: 'var(--color-muted)', marginTop: '4px' }}>
               From {completedTickets.length} completed table bills
             </div>

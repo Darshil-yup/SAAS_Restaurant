@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
 import { ChefHat, CheckCircle2, AlertCircle, Wifi, Cloud, Flame, Timer, RefreshCw, QrCode } from 'lucide-react';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import './index.css';
 
 const KitchenHubApp = () => {
@@ -14,6 +15,7 @@ const KitchenHubApp = () => {
   const isGracePeriodRef = useRef(true);
   const [checkedItems, setCheckedItems] = useState({});
   const [loading, setLoading] = useState(true);
+  const shouldReduceMotion = useReducedMotion();
 
   const hubHost = typeof window !== 'undefined'
     ? (window.location.port === '4000'
@@ -207,22 +209,23 @@ const KitchenHubApp = () => {
   const readyTickets = tickets.filter(t => t.status === 'ready');
 
   return (
-    <div style={{ minHeight: '100vh', background: '#090d16', color: '#f1f5f9', fontFamily: 'Outfit, sans-serif', padding: '24px' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--color-canvas)', color: 'var(--color-ink)', fontFamily: 'var(--font-body)', padding: '24px' }}>
       {/* Top Navigation / Header */}
       <header style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        background: '#111827', border: '1px solid #1f2937', borderRadius: '16px',
-        padding: '16px 24px', marginBottom: '24px', flexWrap: 'wrap', gap: '16px'
+        background: '#ffffff', border: '1px solid var(--color-hairline)', borderRadius: 'var(--radius-md)',
+        padding: '16px 24px', marginBottom: '24px', flexWrap: 'wrap', gap: '16px',
+        boxShadow: 'var(--shadow-card-float)'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{ background: '#3b82f6', width: '44px', height: '44px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px' }}>
+          <div style={{ background: 'var(--color-primary)', color: '#ffffff', width: '44px', height: '44px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px' }}>
             👨‍🍳
           </div>
           <div>
-            <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 800, letterSpacing: '-0.5px' }}>
+            <h1 className="typography-display-sm" style={{ margin: 0, color: 'var(--color-ink)' }}>
               Kitchen Hub Display
             </h1>
-            <div style={{ fontSize: '13px', color: '#94a3b8', marginTop: '2px' }}>
+            <div style={{ fontSize: '13px', color: 'var(--color-muted)', marginTop: '2px' }}>
               {pairingInfo ? `${pairingInfo.name} (${pairingInfo.pairing_code})` : 'Connecting to Reception Hub...'}
             </div>
           </div>
@@ -231,28 +234,31 @@ const KitchenHubApp = () => {
         {/* Live System Status Badges */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
           {/* LAN Connection Badge */}
-          <div style={{
-            background: wsConnStatus === 'connected' ? 'rgba(16, 185, 129, 0.15)' : wsConnStatus === 'connecting' ? 'rgba(148, 163, 184, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-            border: `1px solid ${wsConnStatus === 'connected' ? '#10b981' : wsConnStatus === 'connecting' ? '#64748b' : '#ef4444'}`,
-            color: wsConnStatus === 'connected' ? '#10b981' : wsConnStatus === 'connecting' ? '#94a3b8' : '#ef4444',
-            padding: '6px 14px', borderRadius: '999px', fontSize: '12px', fontWeight: 700,
-            display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'JetBrains Mono, monospace'
-          }}>
+          <motion.div
+            layout={!shouldReduceMotion}
+            style={{
+              background: wsConnStatus === 'connected' ? 'var(--status-green-bg)' : wsConnStatus === 'connecting' ? 'var(--color-surface-soft)' : 'var(--status-rust-bg)',
+              border: `1px solid ${wsConnStatus === 'connected' ? 'var(--status-green-border)' : wsConnStatus === 'connecting' ? 'var(--color-hairline)' : 'var(--status-rust-border)'}`,
+              color: wsConnStatus === 'connected' ? 'var(--status-green-text)' : wsConnStatus === 'connecting' ? 'var(--color-muted)' : 'var(--status-rust-text)',
+              padding: '6px 14px', borderRadius: 'var(--radius-full)', fontSize: '12px', fontWeight: 700,
+              display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--font-mono)'
+            }}
+          >
             {wsConnStatus === 'connecting' ? (
               <RefreshCw size={14} className="spin" />
             ) : (
               <Wifi size={14} />
             )}
             {wsConnStatus === 'connected' ? 'LAN WiFi Active' : wsConnStatus === 'connecting' ? 'Connecting…' : 'LAN Disconnected'}
-          </div>
+          </motion.div>
 
           {/* Cloud Sync Status Badge */}
           <div style={{
-            background: syncStatus.online ? (syncStatus.queued > 0 ? 'rgba(245, 158, 11, 0.15)' : 'rgba(16, 185, 129, 0.15)') : 'rgba(245, 158, 11, 0.15)',
-            border: `1px solid ${syncStatus.online ? (syncStatus.queued > 0 ? '#f59e0b' : '#10b981') : '#f59e0b'}`,
-            color: syncStatus.online ? (syncStatus.queued > 0 ? '#f59e0b' : '#10b981') : '#f59e0b',
-            padding: '6px 14px', borderRadius: '999px', fontSize: '12px', fontWeight: 700,
-            display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'JetBrains Mono, monospace'
+            background: syncStatus.online ? (syncStatus.queued > 0 ? 'var(--status-amber-bg)' : 'var(--status-green-bg)') : 'var(--status-amber-bg)',
+            border: `1px solid ${syncStatus.online ? (syncStatus.queued > 0 ? 'var(--status-amber-border)' : 'var(--status-green-border)') : 'var(--status-amber-border)'}`,
+            color: syncStatus.online ? (syncStatus.queued > 0 ? 'var(--status-amber-text)' : 'var(--status-green-text)') : 'var(--status-amber-text)',
+            padding: '6px 14px', borderRadius: 'var(--radius-full)', fontSize: '12px', fontWeight: 700,
+            display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--font-mono)'
           }}>
             <Cloud size={14} />
             {syncStatus.online 
@@ -260,12 +266,13 @@ const KitchenHubApp = () => {
               : `Local Only (${syncStatus.queued} queued)`}
           </div>
 
-          <button
+          <motion.button
+            whileTap={shouldReduceMotion ? {} : { scale: 0.95 }}
             onClick={() => { fetchActiveTickets(); fetchSyncStatus(); }}
-            style={{ background: '#1f2937', color: '#94a3b8', border: '1px solid #374151', padding: '8px 12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 600 }}
+            style={{ background: 'var(--color-surface-soft)', color: 'var(--color-body)', border: '1px solid var(--color-hairline)', padding: '8px 14px', borderRadius: 'var(--radius-full)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 600 }}
           >
             <RefreshCw size={14} /> Refresh
-          </button>
+          </motion.button>
         </div>
       </header>
 
@@ -274,175 +281,206 @@ const KitchenHubApp = () => {
         
         {/* Left Column: Waiter Pairing QR Code & Details */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div style={{ background: '#111827', border: '1px solid #1f2937', borderRadius: '16px', padding: '20px', textAlign: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontSize: '13px', fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '12px' }}>
+          <div style={{ background: '#ffffff', border: '1px solid var(--color-hairline)', borderRadius: 'var(--radius-md)', padding: '20px', textAlign: 'center', boxShadow: 'var(--shadow-card-float)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontSize: '12px', fontWeight: 700, color: 'var(--color-primary)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '12px', fontFamily: 'var(--font-display)' }}>
               <QrCode size={16} /> Waiter Pairing QR Code
             </div>
             
             {qrCodeUrl ? (
-              <div style={{ background: '#ffffff', padding: '12px', borderRadius: '12px', display: 'inline-block', marginBottom: '12px' }}>
+              <div style={{ background: '#ffffff', padding: '12px', borderRadius: '12px', border: '1px solid var(--color-hairline)', display: 'inline-block', marginBottom: '12px' }}>
                 <img src={qrCodeUrl} alt="Waiter App Pairing QR" style={{ width: '180px', height: '180px', display: 'block' }} />
               </div>
             ) : (
-              <div style={{ height: '180px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>Generating QR...</div>
+              <div style={{ height: '180px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-muted)' }}>Generating QR...</div>
             )}
 
-            <div style={{ fontSize: '13px', color: '#cbd5e1', fontWeight: 600 }}>
+            <div style={{ fontSize: '13px', color: 'var(--color-ink)', fontWeight: 600 }}>
               Scan with Waiter Phone Camera
             </div>
-            <div style={{ fontSize: '11px', color: '#64748b', marginTop: '4px', fontFamily: 'JetBrains Mono, monospace' }}>
+            <div style={{ fontSize: '11px', color: 'var(--color-muted)', marginTop: '4px', fontFamily: 'var(--font-mono)' }}>
               LAN Address: {pairingInfo?.server_url || hubHost}/waiter
             </div>
-            <div style={{ marginTop: '12px', background: '#1e293b', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', color: '#94a3b8' }}>
-              Pairing Code: <strong style={{ color: '#38bdf8', fontFamily: 'JetBrains Mono, monospace' }}>{pairingInfo?.pairing_code || '---'}</strong>
+            <div style={{ marginTop: '12px', background: 'var(--color-surface-soft)', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', color: 'var(--color-body)' }}>
+              Pairing Code: <strong style={{ color: 'var(--color-primary)', fontFamily: 'var(--font-mono)' }}>{pairingInfo?.pairing_code || '---'}</strong>
             </div>
           </div>
 
           {/* Quick Metrics Card */}
-          <div style={{ background: '#111827', border: '1px solid #1f2937', borderRadius: '16px', padding: '20px' }}>
-            <div style={{ fontSize: '12px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', marginBottom: '12px' }}>
+          <div style={{ background: '#ffffff', border: '1px solid var(--color-hairline)', borderRadius: 'var(--radius-md)', padding: '20px', boxShadow: 'var(--shadow-card-float)' }}>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-muted)', textTransform: 'uppercase', marginBottom: '12px', fontFamily: 'var(--font-display)' }}>
               Kitchen Summary
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              <div style={{ background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.2)', padding: '12px', borderRadius: '10px', textAlign: 'center' }}>
-                <div style={{ fontSize: '24px', fontWeight: 800, color: '#f59e0b', fontFamily: 'JetBrains Mono, monospace' }}>{activeTickets.length}</div>
-                <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', fontWeight: 600 }}>ACTIVE KOTS</div>
+              <div style={{ background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', padding: '12px', borderRadius: '10px', textAlign: 'center' }}>
+                <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--status-amber-text)', fontFamily: 'var(--font-mono)' }}>{activeTickets.length}</div>
+                <div style={{ fontSize: '11px', color: 'var(--status-amber-text)', marginTop: '2px', fontWeight: 600 }}>ACTIVE KOTS</div>
               </div>
-              <div style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '12px', borderRadius: '10px', textAlign: 'center' }}>
-                <div style={{ fontSize: '24px', fontWeight: 800, color: '#10b981', fontFamily: 'JetBrains Mono, monospace' }}>{readyTickets.length}</div>
-                <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', fontWeight: 600 }}>READY TO SERVE</div>
+              <div style={{ background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', padding: '12px', borderRadius: '10px', textAlign: 'center' }}>
+                <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--status-green-text)', fontFamily: 'var(--font-mono)' }}>{readyTickets.length}</div>
+                <div style={{ fontSize: '11px', color: 'var(--status-green-text)', marginTop: '2px', fontWeight: 600 }}>READY TO SERVE</div>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Right Column: Live KOT Rail */}
+        {/* Right Column: Live KOT Rail (SIGNATURE MOTION MOMENT: TICKET PRINT-IN) */}
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#f8fafc' }}>
+            <h2 className="typography-title-md" style={{ margin: 0, color: 'var(--color-ink)', fontSize: '18px' }}>
               Live Order Tickets ({activeTickets.length})
             </h2>
-            <span style={{ fontSize: '12px', color: '#64748b', fontFamily: 'JetBrains Mono, monospace' }}>
-              Instant LAN WebSocket Push
+            <span style={{ fontSize: '12px', color: 'var(--color-muted)', fontFamily: 'var(--font-mono)' }}>
+              ⚡ Instant Physical Ticket Printer Motion
             </span>
           </div>
 
           {loading ? (
-            <div style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>Loading active KOTs...</div>
+            <div style={{ padding: '40px', textAlign: 'center', color: 'var(--color-muted)' }}>Loading active KOTs...</div>
           ) : activeTickets.length === 0 ? (
             <div style={{
-              background: '#111827', border: '1px dashed #374151', borderRadius: '16px', padding: '60px 20px',
-              textAlign: 'center', color: '#94a3b8'
+              background: '#ffffff', border: '1px dashed var(--color-hairline)', borderRadius: 'var(--radius-md)', padding: '60px 20px',
+              textAlign: 'center', color: 'var(--color-muted)'
             }}>
-              <ChefHat size={40} style={{ color: '#475569', marginBottom: '12px' }} />
-              <div style={{ fontSize: '16px', fontWeight: 700, color: '#f1f5f9' }}>Kitchen Rail Clear</div>
-              <div style={{ fontSize: '13px', marginTop: '4px', color: '#64748b' }}>
+              <ChefHat size={40} style={{ color: 'var(--color-muted)', marginBottom: '12px' }} />
+              <div style={{ fontSize: '16px', fontWeight: 700, color: 'var(--color-ink)', fontFamily: 'var(--font-display)' }}>Kitchen Rail Clear</div>
+              <div style={{ fontSize: '13px', marginTop: '4px', color: 'var(--color-muted)' }}>
                 Orders placed on waiter phones will pop up here in real time.
               </div>
             </div>
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px' }}>
-              {activeTickets.map(ticket => {
-                const canMark = allChecked(ticket);
-                return (
-                  <div key={ticket.id || ticket.ticket_number} style={{
-                    background: '#111827', border: '1px solid #1f2937', borderRadius: '14px',
-                    padding: '16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between'
-                  }}>
-                    <div>
-                      {/* Ticket Header */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #1f2937', paddingBottom: '10px', marginBottom: '12px' }}>
-                        <div>
-                          <span style={{ fontSize: '11px', fontWeight: 700, color: '#f59e0b', fontFamily: 'JetBrains Mono, monospace' }}>
-                            TICKET #{ticket.ticket_number}
-                          </span>
-                          <div style={{ fontSize: '18px', fontWeight: 800, color: '#f8fafc', marginTop: '2px' }}>
-                            {ticket.table_name || 'Table'}
-                          </div>
-                        </div>
-                        <span style={{ fontSize: '11px', background: ticket.synced_to_cloud ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', color: ticket.synced_to_cloud ? '#10b981' : '#f59e0b', padding: '3px 8px', borderRadius: '4px', fontWeight: 600, fontFamily: 'JetBrains Mono, monospace' }}>
-                          {ticket.synced_to_cloud ? '✓ Synced' : '⏳ Queued'}
-                        </span>
-                      </div>
-
-                      {/* Items Checklist */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
-                        {ticket.items && ticket.items.map((item, idx) => {
-                          const isChecked = !!checkedItems[`${ticket.id}_${idx}`];
-                          return (
-                            <div
-                              key={idx}
-                              onClick={() => toggleCheck(ticket.id, idx)}
-                              style={{
-                                display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer',
-                                opacity: isChecked ? 0.4 : 1, textDecoration: isChecked ? 'line-through' : 'none'
-                              }}
-                            >
-                              <div style={{
-                                width: '18px', height: '18px', borderRadius: '4px',
-                                border: `1.5px solid ${isChecked ? '#10b981' : '#475569'}`,
-                                background: isChecked ? '#10b981' : 'transparent',
-                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                color: '#fff', fontSize: '10px', fontWeight: 800
-                              }}>
-                                {isChecked && '✓'}
-                              </div>
-                              <span style={{ fontSize: '14px', fontWeight: 600, color: '#e2e8f0' }}>
-                                {item.qty > 1 && <strong style={{ color: '#38bdf8' }}>{item.qty}× </strong>}
-                                {item.name}
-                              </span>
+              <AnimatePresence mode="popLayout">
+                {activeTickets.map(ticket => {
+                  const canMark = allChecked(ticket);
+                  return (
+                    <motion.div
+                      key={ticket.id || ticket.ticket_number}
+                      layout={!shouldReduceMotion}
+                      initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -45, scale: 0.94, rotateX: -10 }}
+                      animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0, scale: 1, rotateX: 0 }}
+                      exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, x: 60, scale: 0.9 }}
+                      transition={shouldReduceMotion ? { duration: 0.01 } : {
+                        type: 'spring',
+                        stiffness: 380,
+                        damping: 24,
+                        mass: 0.8
+                      }}
+                      style={{
+                        background: '#ffffff',
+                        border: '1px solid var(--color-hairline)',
+                        borderRadius: 'var(--radius-md)',
+                        padding: '16px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justify: 'space-between',
+                        boxShadow: 'var(--shadow-card-float)',
+                        transformOrigin: 'top center'
+                      }}
+                    >
+                      <div>
+                        {/* Ticket Header */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--color-hairline)', paddingBottom: '10px', marginBottom: '12px' }}>
+                          <div>
+                            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--color-primary)', fontFamily: 'var(--font-mono)' }}>
+                              TICKET #{ticket.ticket_number}
+                            </span>
+                            <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--color-ink)', marginTop: '2px', fontFamily: 'var(--font-display)' }}>
+                              {ticket.table_name || 'Table'}
                             </div>
-                          );
-                        })}
+                          </div>
+                          <span style={{ fontSize: '11px', background: ticket.synced_to_cloud ? 'var(--status-green-bg)' : 'var(--status-amber-bg)', color: ticket.synced_to_cloud ? 'var(--status-green-text)' : 'var(--status-amber-text)', padding: '3px 8px', borderRadius: '999px', fontWeight: 600, fontFamily: 'var(--font-mono)', border: `1px solid ${ticket.synced_to_cloud ? 'var(--status-green-border)' : 'var(--status-amber-border)'}` }}>
+                            {ticket.synced_to_cloud ? '✓ Synced' : '⏳ Queued'}
+                          </span>
+                        </div>
+
+                        {/* Items Checklist */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+                          {ticket.items && ticket.items.map((item, idx) => {
+                            const isChecked = !!checkedItems[`${ticket.id}_${idx}`];
+                            return (
+                              <div
+                                key={idx}
+                                onClick={() => toggleCheck(ticket.id, idx)}
+                                style={{
+                                  display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer',
+                                  opacity: isChecked ? 0.4 : 1, textDecoration: isChecked ? 'line-through' : 'none'
+                                }}
+                              >
+                                <div style={{
+                                  width: '18px', height: '18px', borderRadius: '4px',
+                                  border: `1.5px solid ${isChecked ? 'var(--status-green-text)' : 'var(--color-hairline)'}`,
+                                  background: isChecked ? 'var(--status-green-text)' : 'transparent',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  color: '#fff', fontSize: '10px', fontWeight: 800
+                                }}>
+                                  {isChecked && '✓'}
+                                </div>
+                                <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--color-ink)' }}>
+                                  {item.qty > 1 && <strong style={{ color: 'var(--color-primary)' }}>{item.qty}× </strong>}
+                                  {item.name}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {ticket.note && (
+                          <div style={{ background: 'var(--status-amber-bg)', padding: '8px 10px', borderRadius: '6px', fontSize: '12px', color: 'var(--status-amber-text)', fontStyle: 'italic', marginBottom: '12px', borderLeft: '3px solid var(--color-primary)' }}>
+                            📝 {ticket.note}
+                          </div>
+                        )}
                       </div>
 
-                      {ticket.note && (
-                        <div style={{ background: '#1e293b', padding: '8px 10px', borderRadius: '6px', fontSize: '12px', color: '#94a3b8', fontStyle: 'italic', marginBottom: '12px', borderLeft: '3px solid #f59e0b' }}>
-                          📝 {ticket.note}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Bottom Action */}
-                    <div style={{ borderTop: '1px solid #1f2937', paddingTop: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '12px', color: '#64748b' }}>
-                        By {ticket.created_by_waiter || 'Waiter'}
-                      </span>
-                      <button
-                        onClick={() => handleMarkReady(ticket)}
-                        disabled={!canMark}
-                        style={{
-                          background: canMark ? '#10b981' : '#1e293b',
-                          color: canMark ? '#ffffff' : '#64748b',
-                          border: 'none', padding: '8px 14px', borderRadius: '8px',
-                          fontWeight: 700, fontSize: '13px', cursor: canMark ? 'pointer' : 'not-allowed'
-                        }}
-                      >
-                        {canMark ? '✓ Mark Ready' : 'Tick All'}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+                      {/* Bottom Action */}
+                      <div style={{ borderTop: '1px solid var(--color-hairline)', paddingTop: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '12px', color: 'var(--color-muted)' }}>
+                          By {ticket.created_by_waiter || 'Waiter'}
+                        </span>
+                        <motion.button
+                          whileTap={shouldReduceMotion || !canMark ? {} : { scale: 0.95 }}
+                          onClick={() => handleMarkReady(ticket)}
+                          disabled={!canMark}
+                          style={{
+                            background: canMark ? 'var(--status-green-text)' : 'var(--color-surface-soft)',
+                            color: canMark ? '#ffffff' : 'var(--color-muted)',
+                            border: `1px solid ${canMark ? 'var(--status-green-border)' : 'var(--color-hairline)'}`, padding: '8px 14px', borderRadius: 'var(--radius-full)',
+                            fontWeight: 700, fontSize: '13px', cursor: canMark ? 'pointer' : 'not-allowed'
+                          }}
+                        >
+                          {canMark ? '✓ Mark Ready' : 'Tick All'}
+                        </motion.button>
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </AnimatePresence>
             </div>
           )}
 
           {/* Ready Tickets Section */}
           {readyTickets.length > 0 && (
             <div style={{ marginTop: '32px' }}>
-              <h3 style={{ fontSize: '16px', fontWeight: 700, color: '#10b981', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--status-green-text)', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px', fontFamily: 'var(--font-display)' }}>
                 <CheckCircle2 size={18} /> Ready to Serve ({readyTickets.length})
               </h3>
               <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                {readyTickets.map(t => (
-                  <div key={t.id || t.ticket_number} style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '10px 14px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <CheckCircle2 size={16} style={{ color: '#10b981' }} />
-                    <div>
-                      <strong style={{ color: '#f8fafc', fontSize: '13px' }}>{t.table_name || 'Table'}</strong>
-                      <div style={{ fontSize: '11px', color: '#94a3b8' }}>Ticket #{t.ticket_number} · Ready</div>
-                    </div>
-                  </div>
-                ))}
+                <AnimatePresence>
+                  {readyTickets.map(t => (
+                    <motion.div
+                      key={t.id || t.ticket_number}
+                      initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.9 }}
+                      animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1 }}
+                      exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.9 }}
+                      style={{ background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', padding: '10px 14px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '10px' }}
+                    >
+                      <CheckCircle2 size={16} style={{ color: 'var(--status-green-text)' }} />
+                      <div>
+                        <strong style={{ color: 'var(--color-ink)', fontSize: '13px' }}>{t.table_name || 'Table'}</strong>
+                        <div style={{ fontSize: '11px', color: 'var(--color-muted)' }}>Ticket #{t.ticket_number} · Ready</div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
               </div>
             </div>
           )}

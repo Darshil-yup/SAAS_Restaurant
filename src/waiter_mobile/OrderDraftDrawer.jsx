@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { usePos } from '../context/PosContext';
 import { Send, Trash2, Edit3, Wifi } from 'lucide-react';
+import { motion } from 'framer-motion';
 
 export const OrderDraftDrawer = ({ selectedTableId, draftItems, onRemoveItem, onClearDraft, hubUrl, hubConnected }) => {
   const { menu, tables, currentRestaurant } = usePos();
@@ -184,7 +185,8 @@ export const OrderDraftDrawer = ({ selectedTableId, draftItems, onRemoveItem, on
           )}
 
           {/* Send Button */}
-          <button
+          <motion.button
+            whileTap={!hasItems || !hubConnected || isSubmitting ? {} : { scale: 0.96 }}
             onClick={handleSend}
             disabled={!hasItems || !hubConnected || isSubmitting}
             className="btn btn-primary"
@@ -192,7 +194,7 @@ export const OrderDraftDrawer = ({ selectedTableId, draftItems, onRemoveItem, on
           >
             <Send size={16} />
             {isSubmitting ? '⏳ Sending to Kitchen...' : (hubConnected ? 'Send to Kitchen KDS (LAN)' : 'Not Connected to Hub')}
-          </button>
+          </motion.button>
         </div>
       )}
     </div>

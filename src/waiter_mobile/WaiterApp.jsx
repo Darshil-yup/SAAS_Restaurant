@@ -3,10 +3,12 @@ import { FloorGrid } from './FloorGrid';
 import { RapidOrderBuilder } from './RapidOrderBuilder';
 import { OrderDraftDrawer } from './OrderDraftDrawer';
 import { WifiOff, LayoutGrid, Utensils, ShoppingBag, ShieldCheck, Server, RefreshCw } from 'lucide-react';
+import { motion, useReducedMotion } from 'framer-motion';
 import { usePos } from '../context/PosContext';
 
 export const WaiterApp = () => {
   const { currentRestaurant } = usePos() || {};
+  const shouldReduceMotion = useReducedMotion();
   const [selectedTableId, setSelectedTableId] = useState(null);
   const [drafts, setDrafts] = useState({});
   const [activeTab, setActiveTab] = useState('floor');
