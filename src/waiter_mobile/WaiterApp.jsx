@@ -2,22 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { FloorGrid } from './FloorGrid';
 import { RapidOrderBuilder } from './RapidOrderBuilder';
 import { OrderDraftDrawer } from './OrderDraftDrawer';
-import { Smartphone, Wifi, WifiOff, Battery, Signal, LayoutGrid, Utensils, ShoppingBag, ShieldCheck, Server, RefreshCw } from 'lucide-react';
+import { WifiOff, LayoutGrid, Utensils, ShoppingBag, ShieldCheck, Server, RefreshCw } from 'lucide-react';
 import { usePos } from '../context/PosContext';
-
-const Clock = () => {
-  const [time, setTime] = useState('');
-  useEffect(() => {
-    const update = () => {
-      const now = new Date();
-      setTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
-    };
-    update();
-    const interval = setInterval(update, 10000);
-    return () => clearInterval(interval);
-  }, []);
-  return <span>{time}</span>;
-};
 
 export const WaiterApp = () => {
   const { currentRestaurant } = usePos() || {};
@@ -35,7 +21,8 @@ export const WaiterApp = () => {
   });
 
   const [hubInfo, setHubInfo] = useState(null);
-  const [hubConnected, setHubConnected] = useState(false);
+  const [connStatus, setConnStatus] = useState('connecting'); // 'connecting' | 'connected' | 'disconnected'
+  const hubConnected = connStatus === 'connected';
   const [showPairModal, setShowPairModal] = useState(false);
   const [manualIpInput, setManualIpInput] = useState('');
   const [pairError, setPairError] = useState('');
@@ -45,6 +32,7 @@ export const WaiterApp = () => {
   const [liveTables, setLiveTables] = useState([]);
   const [activeOrders, setActiveOrders] = useState([]);
   const wasConnectedRef = useRef(false);
+  const isGracePeriodRef = useRef(true);
 
   // 1. Fetch Live Tables & Open Orders from Hub Server
   const fetchLiveState = useCallback(async (targetUrl = hubUrl) => {
@@ -97,7 +85,7 @@ export const WaiterApp = () => {
           fetchLiveState(cleanUrl);
         }
         wasConnectedRef.current = true;
-        setHubConnected(true);
+        setConnStatus('connected');
         setHubUrl(cleanUrl);
         localStorage.setItem('mejwani_hub_url', cleanUrl);
         setIsTestingConn(false);
@@ -105,10 +93,10 @@ export const WaiterApp = () => {
       }
     } catch (err) {
       pingFailuresRef.current += 1;
-      // Re-tuned: require 2 consecutive missed pings before declaring offline state
-      if (pingFailuresRef.current >= 2) {
+      // Require 2 consecutive missed pings (or post grace window) before declaring offline state
+      if (pingFailuresRef.current >= 2 || !isGracePeriodRef.current) {
         wasConnectedRef.current = false;
-        setHubConnected(false);
+        setConnStatus('disconnected');
       }
     }
     setIsTestingConn(false);
@@ -116,6 +104,14 @@ export const WaiterApp = () => {
   }, [hubUrl, fetchLiveState]);
 
   useEffect(() => {
+    isGracePeriodRef.current = true;
+    const graceTimer = setTimeout(() => {
+      isGracePeriodRef.current = false;
+      if (pingFailuresRef.current >= 2) {
+        setConnStatus('disconnected');
+      }
+    }, 3000);
+
     checkHubConnection(hubUrl);
     fetchLiveState(hubUrl);
 
@@ -124,7 +120,10 @@ export const WaiterApp = () => {
       checkHubConnection(hubUrl);
     }, 5000);
 
-    return () => clearInterval(healthInterval);
+    return () => {
+      clearTimeout(graceTimer);
+      clearInterval(healthInterval);
+    };
   }, [hubUrl, checkHubConnection, fetchLiveState]);
 
   // 3. WebSocket Real-Time Subscription to WS /live (Bug 1 Fix)
@@ -150,12 +149,13 @@ export const WaiterApp = () => {
           if (!isSubscribed) return;
           try {
             const msg = JSON.parse(event.data);
-            if (['NEW_ORDER', 'TICKET_READY', 'CLEAR_TABLE', 'SYNC_STATUS_CHANGE'].includes(msg.type)) {
-              // Re-fetch live tables and orders on any order status event
+            if (msg.type === 'TABLE_STATUS_CHANGE') {
               fetchLiveState(cleanUrl);
+            } else if (msg.type === 'NEW_ORDER') {
+              setActiveOrders(prev => [msg.payload, ...prev]);
             }
-          } catch (err) {
-            console.warn('WS message parse error:', err);
+          } catch (e) {
+            console.warn('WS message parse error:', e);
           }
         };
 
@@ -166,9 +166,11 @@ export const WaiterApp = () => {
         };
 
         ws.onerror = () => {
-          ws?.close();
+          if (ws) ws.close();
         };
-      } catch (err) {}
+      } catch (err) {
+        console.warn('WS connection failed:', err);
+      }
     };
 
     connectWs();
@@ -180,25 +182,20 @@ export const WaiterApp = () => {
   }, [hubUrl, fetchLiveState]);
 
   // Handle Clearing Table Bill
-  const handleClearTableBill = async (tableId) => {
-    const cleanUrl = hubUrl.replace(/\/+$/, '');
-    try {
-      const res = await fetch(`${cleanUrl}/tables/${tableId}/clear`, { method: 'POST' });
-      if (res.ok) {
-        fetchLiveState(cleanUrl);
-      }
-    } catch (err) {
-      console.error('Failed to clear table bill:', err);
-    }
+  const handleClearTableBill = (tableId) => {
+    setDrafts(p => {
+      const c = { ...p };
+      delete c[tableId];
+      return c;
+    });
   };
 
   const handlePairSubmit = async (e) => {
-    e?.preventDefault();
+    e.preventDefault();
+    if (!manualIpInput.trim()) return;
+    setConnStatus('connecting');
+
     let raw = manualIpInput.trim();
-    if (!raw) {
-      setPairError('Please enter a LAN IP or address');
-      return;
-    }
     if (!raw.startsWith('http://') && !raw.startsWith('https://')) {
       raw = `http://${raw}`;
     }
@@ -212,6 +209,7 @@ export const WaiterApp = () => {
       setManualIpInput('');
       fetchLiveState(raw);
     } else {
+      setConnStatus('disconnected');
       setPairError(`Could not reach Kitchen Hub at ${raw}. Check WiFi connection.`);
     }
   };
@@ -246,22 +244,15 @@ export const WaiterApp = () => {
   ];
 
   return (
-    <div style={{ width: '100%', minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--color-canvas)' }}>
+    <div style={{
+      width: '100%', minHeight: '100vh', display: 'flex', flexDirection: 'column',
+      background: 'var(--color-canvas)',
+      paddingTop: 'env(safe-area-inset-top, 0px)',
+      paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+      paddingLeft: 'env(safe-area-inset-left, 0px)',
+      paddingRight: 'env(safe-area-inset-right, 0px)'
+    }}>
       <div>
-        {/* iOS Status Bar */}
-        <div style={{
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          padding: '12px 20px 4px', fontSize: '12px', fontFamily: 'var(--font-mono)', fontWeight: 600,
-          color: 'var(--color-muted)', flex: 'none'
-        }}>
-          <Clock />
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Signal size={13} style={{ color: hubConnected ? '#10b981' : '#ef4444' }} />
-            <Wifi size={13} style={{ color: hubConnected ? '#10b981' : '#ef4444' }} />
-            <Battery size={14} />
-          </div>
-        </div>
-
         {/* App Header & Pairing Status */}
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -290,20 +281,26 @@ export const WaiterApp = () => {
             onClick={() => setShowPairModal(true)}
             style={{
               fontSize: '10px', fontWeight: 700,
-              color: hubConnected ? '#10b981' : '#ef4444',
-              background: hubConnected ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+              color: connStatus === 'connected' ? '#10b981' : connStatus === 'connecting' ? '#94a3b8' : '#ef4444',
+              background: connStatus === 'connected' ? 'rgba(16, 185, 129, 0.12)' : connStatus === 'connecting' ? 'rgba(148, 163, 184, 0.15)' : 'rgba(239, 68, 68, 0.12)',
               padding: '4px 10px', borderRadius: '999px',
-              border: `1px solid ${hubConnected ? '#10b981' : '#ef4444'}`,
+              border: `1px solid ${connStatus === 'connected' ? '#10b981' : connStatus === 'connecting' ? '#64748b' : '#ef4444'}`,
               display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer'
             }}
           >
-            {hubConnected ? <ShieldCheck size={12} /> : <WifiOff size={12} />}
-            {hubConnected ? 'LAN Connected' : 'Not Connected'}
+            {connStatus === 'connected' ? (
+              <ShieldCheck size={12} />
+            ) : connStatus === 'connecting' ? (
+              <RefreshCw size={12} className="spin" />
+            ) : (
+              <WifiOff size={12} />
+            )}
+            {connStatus === 'connected' ? 'LAN Connected' : connStatus === 'connecting' ? 'Connecting…' : 'Not Connected'}
           </button>
         </div>
 
         {/* Unreachable Hub Offline Banner (Bug 2 Fix) */}
-        {!hubConnected && (
+        {connStatus === 'disconnected' && (
           <div style={{
             background: 'rgba(239, 68, 68, 0.15)', borderBottom: '1px solid rgba(239, 68, 68, 0.3)',
             padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',

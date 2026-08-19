@@ -8,7 +8,10 @@ const KitchenHubApp = () => {
   const [qrCodeUrl, setQrCodeUrl] = useState(null);
   const [tickets, setTickets] = useState([]);
   const [syncStatus, setSyncStatus] = useState({ queued: 0, online: true, isSyncing: false });
-  const [wsConnected, setWsConnected] = useState(false);
+  const [wsConnStatus, setWsConnStatus] = useState('connecting'); // 'connecting' | 'connected' | 'disconnected'
+  const wsConnected = wsConnStatus === 'connected';
+  const missedWsFailuresRef = useRef(0);
+  const isGracePeriodRef = useRef(true);
   const [checkedItems, setCheckedItems] = useState({});
   const [loading, setLoading] = useState(true);
 
@@ -69,6 +72,14 @@ const KitchenHubApp = () => {
 
   // 4. Setup WebSocket Connection
   useEffect(() => {
+    isGracePeriodRef.current = true;
+    const graceTimer = setTimeout(() => {
+      isGracePeriodRef.current = false;
+      if (missedWsFailuresRef.current >= 2) {
+        setWsConnStatus('disconnected');
+      }
+    }, 3000);
+
     fetchPairing();
     fetchQr();
     fetchActiveTickets();
@@ -79,49 +90,62 @@ const KitchenHubApp = () => {
     let ws;
 
     const connectWs = () => {
-      ws = new WebSocket(wsUrl);
+      try {
+        ws = new WebSocket(wsUrl);
 
-      ws.onopen = () => {
-        setWsConnected(true);
-        console.log('⚡ Connected to Hub Server WebSocket');
-      };
+        ws.onopen = () => {
+          missedWsFailuresRef.current = 0;
+          setWsConnStatus('connected');
+          console.log('⚡ Connected to Hub Server WebSocket');
+        };
 
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === 'NEW_ORDER') {
-            const newTicket = msg.payload;
-            setTickets(prev => {
-              const exists = prev.some(t => t.id === newTicket.id || t.ticket_number === newTicket.ticket_number);
-              if (exists) return prev;
-              return [newTicket, ...prev];
-            });
-          } else if (msg.type === 'TICKET_READY') {
-            const readyTicket = msg.payload;
-            setTickets(prev => prev.map(t => {
-              if (t.id === readyTicket.ticket_id || String(t.ticket_number) === String(readyTicket.ticket_number)) {
-                return { ...t, status: 'ready' };
-              }
-              return t;
-            }));
-          } else if (msg.type === 'SYNC_STATUS_CHANGE') {
-            setSyncStatus(msg.payload);
-            // Refresh tickets to update synced_to_cloud badge
-            fetchActiveTickets();
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'NEW_ORDER') {
+              const newTicket = msg.payload;
+              setTickets(prev => {
+                const exists = prev.some(t => t.id === newTicket.id || t.ticket_number === newTicket.ticket_number);
+                if (exists) return prev;
+                return [newTicket, ...prev];
+              });
+            } else if (msg.type === 'TICKET_READY') {
+              const readyTicket = msg.payload;
+              setTickets(prev => prev.map(t => {
+                if (t.id === readyTicket.ticket_id || String(t.ticket_number) === String(readyTicket.ticket_number)) {
+                  return { ...t, status: 'ready' };
+                }
+                return t;
+              }));
+            } else if (msg.type === 'SYNC_STATUS_CHANGE') {
+              setSyncStatus(msg.payload);
+              // Refresh tickets to update synced_to_cloud badge
+              fetchActiveTickets();
+            }
+          } catch (err) {
+            console.warn('Malformed WS message:', err);
           }
-        } catch (err) {
-          console.warn('Malformed WS message:', err);
+        };
+
+        ws.onclose = () => {
+          missedWsFailuresRef.current += 1;
+          if (!isGracePeriodRef.current || missedWsFailuresRef.current >= 2) {
+            setWsConnStatus('disconnected');
+          } else {
+            setWsConnStatus('connecting');
+          }
+          setTimeout(connectWs, 3000);
+        };
+
+        ws.onerror = () => {
+          if (ws) ws.close();
+        };
+      } catch (err) {
+        missedWsFailuresRef.current += 1;
+        if (!isGracePeriodRef.current || missedWsFailuresRef.current >= 2) {
+          setWsConnStatus('disconnected');
         }
-      };
-
-      ws.onclose = () => {
-        setWsConnected(false);
-        setTimeout(connectWs, 3000);
-      };
-
-      ws.onerror = () => {
-        setWsConnected(false);
-      };
+      }
     };
 
     connectWs();
@@ -133,6 +157,7 @@ const KitchenHubApp = () => {
     }, 10000);
 
     return () => {
+      clearTimeout(graceTimer);
       if (ws) ws.close();
       clearInterval(interval);
     };
@@ -197,14 +222,18 @@ const KitchenHubApp = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
           {/* LAN Connection Badge */}
           <div style={{
-            background: wsConnected ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-            border: `1px solid ${wsConnected ? '#10b981' : '#ef4444'}`,
-            color: wsConnected ? '#10b981' : '#ef4444',
+            background: wsConnStatus === 'connected' ? 'rgba(16, 185, 129, 0.15)' : wsConnStatus === 'connecting' ? 'rgba(148, 163, 184, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+            border: `1px solid ${wsConnStatus === 'connected' ? '#10b981' : wsConnStatus === 'connecting' ? '#64748b' : '#ef4444'}`,
+            color: wsConnStatus === 'connected' ? '#10b981' : wsConnStatus === 'connecting' ? '#94a3b8' : '#ef4444',
             padding: '6px 14px', borderRadius: '999px', fontSize: '12px', fontWeight: 700,
             display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'JetBrains Mono, monospace'
           }}>
-            <Wifi size={14} />
-            {wsConnected ? 'LAN WiFi Active' : 'LAN Disconnected'}
+            {wsConnStatus === 'connecting' ? (
+              <RefreshCw size={14} className="spin" />
+            ) : (
+              <Wifi size={14} />
+            )}
+            {wsConnStatus === 'connected' ? 'LAN WiFi Active' : wsConnStatus === 'connecting' ? 'Connecting…' : 'LAN Disconnected'}
           </div>
 
           {/* Cloud Sync Status Badge */}
