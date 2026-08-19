@@ -80,7 +80,7 @@ export const HubDashboardView = () => {
           if (!isSubscribed) return;
           try {
             const msg = JSON.parse(event.data);
-            if (['NEW_ORDER', 'TICKET_READY', 'CLEAR_TABLE', 'SYNC_STATUS_CHANGE'].includes(msg.type)) {
+            if (['NEW_ORDER', 'order_created', 'TICKET_READY', 'order_ready', 'CLEAR_TABLE', 'bill_cleared', 'order_cleared', 'SYNC_STATUS_CHANGE', 'TABLE_STATUS_CHANGE'].includes(msg.type)) {
               fetchDashboardData();
             }
           } catch (err) {}

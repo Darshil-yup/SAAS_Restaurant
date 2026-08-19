@@ -128,7 +128,81 @@ export const WaiterApp = () => {
     };
   }, [hubUrl, checkHubConnection, fetchLiveState]);
 
-  // 3. WebSocket Real-Time Subscription to WS /live (Bug 1 Fix)
+  // Shared WebSocket Message Funnel for all state-changing events
+  const handleHubWsEvent = useCallback((msg, cleanUrl) => {
+    if (!msg || !msg.type) return;
+    const type = msg.type;
+    const payload = msg.payload || {};
+
+    console.log(`⚡ WaiterApp processing WS event: ${type}`, payload);
+
+    // 1. Instant optimistic local state updates
+    if (type === 'TICKET_READY' || type === 'order_ready') {
+      const tableId = payload.table_id;
+      const ticketId = payload.ticket_id || payload.ticket_number || payload.order_id;
+
+      if (tableId) {
+        setLiveTables(prev => prev.map(t => {
+          if (String(t.id) === String(tableId) || (t.name && String(t.name).toLowerCase() === String(payload.table_name).toLowerCase())) {
+            return { ...t, status: 'ready' };
+          }
+          return t;
+        }));
+      }
+      if (ticketId) {
+        setActiveOrders(prev => prev.map(o => {
+          if (o.id === ticketId || String(o.ticket_number) === String(ticketId)) {
+            return { ...o, status: 'ready' };
+          }
+          return o;
+        }));
+      }
+    } else if (type === 'CLEAR_TABLE' || type === 'bill_cleared' || type === 'order_cleared') {
+      const tableId = payload.table_id;
+
+      if (tableId) {
+        setLiveTables(prev => prev.map(t => {
+          if (String(t.id) === String(tableId)) {
+            return { ...t, status: 'available', activeOrderTotal: 0, occupiedSince: null };
+          }
+          return t;
+        }));
+
+        setActiveOrders(prev => prev.filter(o => String(o.table_id) !== String(tableId)));
+
+        setDrafts(prev => {
+          const copy = { ...prev };
+          delete copy[tableId];
+          return copy;
+        });
+      }
+    } else if (type === 'NEW_ORDER' || type === 'order_created') {
+      const ticket = payload.ticket || payload;
+      if (ticket && ticket.table_id) {
+        setLiveTables(prev => prev.map(t => {
+          if (String(t.id) === String(ticket.table_id)) {
+            return {
+              ...t,
+              status: t.status === 'ready' ? 'ready' : 'kot',
+              activeOrderTotal: (t.activeOrderTotal || 0) + (Number(ticket.total_amount) || 0)
+            };
+          }
+          return t;
+        }));
+
+        setActiveOrders(prev => {
+          const exists = prev.some(o => o.id === ticket.id || String(o.ticket_number) === String(ticket.ticket_number));
+          if (exists) return prev;
+          return [ticket, ...prev];
+        });
+      }
+    }
+
+    // 2. Authoritative live state fetch to stay 100% synchronized
+    fetchLiveState(cleanUrl);
+  }, [fetchLiveState]);
+
+  // 3. WebSocket Real-Time Subscription to WS /live
   useEffect(() => {
     if (!hubUrl) return;
     const cleanUrl = hubUrl.replace(/\/+$/, '');
@@ -151,11 +225,7 @@ export const WaiterApp = () => {
           if (!isSubscribed) return;
           try {
             const msg = JSON.parse(event.data);
-            if (msg.type === 'TABLE_STATUS_CHANGE') {
-              fetchLiveState(cleanUrl);
-            } else if (msg.type === 'NEW_ORDER') {
-              setActiveOrders(prev => [msg.payload, ...prev]);
-            }
+            handleHubWsEvent(msg, cleanUrl);
           } catch (e) {
             console.warn('WS message parse error:', e);
           }
@@ -181,7 +251,7 @@ export const WaiterApp = () => {
       isSubscribed = false;
       if (ws) ws.close();
     };
-  }, [hubUrl, fetchLiveState]);
+  }, [hubUrl, fetchLiveState, handleHubWsEvent]);
 
   // Handle Clearing Table Bill
   const handleClearTableBill = async (tableId) => {

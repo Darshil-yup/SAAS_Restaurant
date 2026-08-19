@@ -110,26 +110,33 @@ const KitchenHubApp = () => {
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data);
-            if (msg.type === 'NEW_ORDER') {
-              const newTicket = msg.payload;
-              setTickets(prev => {
-                const exists = prev.some(t => t.id === newTicket.id || t.ticket_number === newTicket.ticket_number);
-                if (exists) return prev;
-                return [newTicket, ...prev];
-              });
-            } else if (msg.type === 'TICKET_READY') {
-              const readyTicket = msg.payload;
-              setTickets(prev => prev.map(t => {
-                if (t.id === readyTicket.ticket_id || String(t.ticket_number) === String(readyTicket.ticket_number)) {
-                  return { ...t, status: 'ready' };
-                }
-                return t;
-              }));
-            } else if (msg.type === 'CLEAR_TABLE') {
+            const type = msg.type;
+            const payload = msg.payload || {};
+
+            if (type === 'NEW_ORDER' || type === 'order_created') {
+              const newTicket = payload.ticket || payload;
+              if (newTicket && (newTicket.id || newTicket.ticket_number)) {
+                setTickets(prev => {
+                  const exists = prev.some(t => t.id === newTicket.id || String(t.ticket_number) === String(newTicket.ticket_number));
+                  if (exists) return prev;
+                  return [newTicket, ...prev];
+                });
+              }
+            } else if (type === 'TICKET_READY' || type === 'order_ready') {
+              const readyTicket = payload.ticket || payload;
+              const readyId = readyTicket.ticket_id || readyTicket.id || readyTicket.ticket_number;
+              if (readyId) {
+                setTickets(prev => prev.map(t => {
+                  if (t.id === readyId || String(t.ticket_number) === String(readyId)) {
+                    return { ...t, status: 'ready' };
+                  }
+                  return t;
+                }));
+              }
+            } else if (type === 'CLEAR_TABLE' || type === 'bill_cleared' || type === 'order_cleared') {
               fetchActiveTickets();
-            } else if (msg.type === 'SYNC_STATUS_CHANGE') {
-              setSyncStatus(msg.payload);
-              // Refresh tickets to update synced_to_cloud badge
+            } else if (type === 'SYNC_STATUS_CHANGE') {
+              setSyncStatus(payload);
               fetchActiveTickets();
             }
           } catch (err) {

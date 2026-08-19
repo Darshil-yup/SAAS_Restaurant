@@ -181,8 +181,21 @@ app.post('/orders', (req, res) => {
   // Step 1: Assign ticket number & update memory store
   const newTicket = ticketStore.addTicket(orderData, pairing.restaurant_id);
 
-  // Step 2: Instantly push ticket to all connected Kitchen Display WS clients over LAN BEFORE disk write
+  // Step 2: Instantly push ticket to all connected Kitchen Display & Waiter WS clients over LAN BEFORE disk write
+  const orderCreatedPayload = {
+    order_id: newTicket.id,
+    ticket_id: newTicket.id,
+    ticket_number: newTicket.ticket_number,
+    table_id: newTicket.table_id,
+    table_name: newTicket.table_name,
+    items: newTicket.items,
+    status: 'in_progress',
+    total_amount: newTicket.total_amount,
+    created_at: newTicket.created_at,
+    ticket: newTicket
+  };
   broadcast('NEW_ORDER', newTicket);
+  broadcast('order_created', orderCreatedPayload);
 
   // Store in idempotency cache for 60 seconds
   if (reqId) {
@@ -223,13 +236,17 @@ app.post('/orders/:id/ready', (req, res) => {
   }
 
   // Step 1: Push update to all WS clients immediately over LAN
-  broadcast('TICKET_READY', {
+  const readyPayload = {
+    order_id: updatedTicket.id,
     ticket_id: updatedTicket.id,
     ticket_number: updatedTicket.ticket_number,
     table_id: updatedTicket.table_id,
     table_name: updatedTicket.table_name,
-    status: 'ready'
-  });
+    status: 'ready',
+    ticket: updatedTicket
+  };
+  broadcast('TICKET_READY', readyPayload);
+  broadcast('order_ready', readyPayload);
 
   // Step 2: Queue status update for background cloud sync
   syncQueue.enqueueStatusUpdate(updatedTicket.ticket_number, 'ready', pairing.restaurant_id);
@@ -312,11 +329,16 @@ app.post('/tables/:id/clear', (req, res) => {
     });
   }
 
-  // Broadcast CLEAR_TABLE event to all WS clients over LAN
-  broadcast('CLEAR_TABLE', {
+  // Broadcast CLEAR_TABLE and alias events to all WS clients over LAN
+  const clearPayload = {
     table_id: Number(tableId) || tableId,
-    cleared_count: clearedCount
-  });
+    order_id: tableId,
+    cleared_count: clearedCount,
+    status: 'available'
+  };
+  broadcast('CLEAR_TABLE', clearPayload);
+  broadcast('bill_cleared', clearPayload);
+  broadcast('order_cleared', clearPayload);
 
   const updatedTables = getLiveTables(pairing.restaurant_id);
   console.log(`🧹 Cleared bill for Table ${tableId} (${clearedCount} ticket(s) completed, queued for cloud sync)`);
@@ -341,10 +363,15 @@ app.post('/orders/:id/clear', (req, res) => {
     });
   }
 
-  broadcast('CLEAR_TABLE', {
+  const orderClearPayload = {
     table_id: Number(id) || id,
-    cleared_count: clearedCount
-  });
+    order_id: id,
+    cleared_count: clearedCount,
+    status: 'available'
+  };
+  broadcast('CLEAR_TABLE', orderClearPayload);
+  broadcast('bill_cleared', orderClearPayload);
+  broadcast('order_cleared', orderClearPayload);
 
   const updatedTables = getLiveTables(pairing.restaurant_id);
   console.log(`🧹 Cleared bill for Order/Table ${id} (${clearedCount} ticket(s) completed, queued for cloud sync)`);
