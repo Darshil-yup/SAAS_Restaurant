@@ -1,5 +1,11 @@
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&display=swap');
-@import url('https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@800,700,500&display=swap');
+/* ─── Kullina Design System — Main Stylesheet ───────────────────
+   Imports canonical tokens, then defines component styles.
+   ─────────────────────────────────────────────────────────────── */
+
+@import '../design-system/css/tokens.css';
+@import '../design-system/css/typography.css';
+
+/* ── Font Loading (local files only — no CDN) ── */
 
 @font-face {
   font-family: 'Cabinet Grotesk';
@@ -27,100 +33,7 @@
   font-style: italic;
 }
 
-:root {
-  /* Typography Families */
-  --font-display: 'Cabinet Grotesk', system-ui, -apple-system, sans-serif;
-  --font-body: 'Instrument Sans', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
-
-  /* Colors */
-  --color-primary: #ff5722;
-  --color-primary-active: #303841;
-  --color-primary-disabled: #f5f5f5;
-  --color-luxe: #76abae;
-  --color-plus: #303841;
-
-  --color-ink: #222222;
-  --color-body: #3f3f3f;
-  --color-muted: #6a6a6a;
-  --color-muted-soft: #929292;
-  --color-on-primary: #ffffff;
-  --color-on-dark: #ffffff;
-
-  --color-canvas: #ffffff;
-  --color-surface-soft: #f7f7f7;
-  --color-surface-card: #ffffff;
-  --color-surface-strong: #f2f2f2;
-
-  --color-hairline: #dddddd;
-  --color-hairline-soft: #ebebeb;
-  --color-border-strong: #c1c1c1;
-
-  --color-primary-error-text: #c13515;
-  --color-primary-error-text-hover: #b32505;
-  --color-scrim: rgba(0, 0, 0, 0.5);
-
-  /* Legacy compatibility maps */
-  --bg: var(--color-surface-soft);
-  --panel: var(--color-canvas);
-  --panel-alt: var(--color-surface-soft);
-  --panel-hover: var(--color-surface-strong);
-  --text: var(--color-ink);
-  --text-secondary: var(--color-body);
-  --muted: var(--color-muted);
-  --hairline: var(--color-hairline);
-  --amber: var(--color-primary);
-
-  /* Softened Semantic Status Colors for Light Canvas */
-  --status-green-bg: #e8f5e9;
-  --status-green-text: #2e7d32;
-  --status-green-border: #c8e6c9;
-
-  --status-amber-bg: #fff3e0;
-  --status-amber-text: #ef6c00;
-  --status-amber-border: #ffe0b2;
-
-  --status-blue-bg: #e3f2fd;
-  --status-blue-text: #1565c0;
-  --status-blue-border: #bbdefb;
-
-  --status-rust-bg: #fbe9e7;
-  --status-rust-text: #c62828;
-  --status-rust-border: #ffccbc;
-
-  --green: var(--status-green-text);
-  --green-bg: var(--status-green-bg);
-  --rust: var(--status-rust-text);
-  --rust-bg: var(--status-rust-bg);
-  --blue: var(--status-blue-text);
-  --blue-bg: var(--status-blue-bg);
-  --amber-bg: var(--status-amber-bg);
-
-  /* Spacing Scale */
-  --spacing-xxs: 2px;
-  --spacing-xs: 4px;
-  --spacing-sm: 8px;
-  --spacing-md: 12px;
-  --spacing-base: 16px;
-  --spacing-lg: 24px;
-  --spacing-xl: 32px;
-  --spacing-xxl: 48px;
-  --spacing-section: 64px;
-
-  /* Border Radius */
-  --radius-none: 0px;
-  --radius-xs: 4px;
-  --radius-sm: 8px;
-  --radius-md: 14px;
-  --radius-lg: 20px;
-  --radius-xl: 32px;
-  --radius-full: 9999px;
-
-  /* Elevation */
-  --shadow-flat: none;
-  --shadow-card-float: 0 0 0 1px rgba(0,0,0,0.02), 0 2px 6px 0 rgba(0,0,0,0.04), 0 4px 8px 0 rgba(0,0,0,0.10);
-  --shadow-card: var(--shadow-card-float);
-}
+/* ── Reset ── */
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -134,121 +47,22 @@ html, body {
 }
 
 body {
-  background: var(--color-surface-soft);
   min-height: 100vh;
 }
 
 button { font-family: inherit; cursor: pointer; border: none; background: transparent; user-select: none; }
 input, select, textarea { font-family: inherit; }
-::selection { background: var(--color-primary); color: #ffffff; }
+::selection { background: var(--color-primary); color: var(--color-on-primary); }
 :focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: var(--radius-xs); }
 
-/* ── Typography Token Classes ── */
-.typography-rating-display {
-  font-family: var(--font-display);
-  font-size: 64px;
-  font-weight: 700;
-  line-height: 1.1;
-  letter-spacing: -2px;
-  color: var(--color-ink);
-}
-
-.typography-display-xl {
-  font-family: var(--font-display);
-  font-size: 28px;
-  font-weight: 700;
-  line-height: 1.43;
-  letter-spacing: 0;
-}
-
-.typography-display-md {
-  font-family: var(--font-display);
-  font-size: 21px;
-  font-weight: 700;
-  line-height: 1.43;
-  letter-spacing: 0;
-}
-
-.typography-display-sm {
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1.20;
-  letter-spacing: -0.18px;
-}
-
-.typography-title-md {
-  font-family: var(--font-display);
-  font-size: 16px;
-  font-weight: 600;
-  line-height: 1.25;
-  letter-spacing: 0;
-}
-
-.typography-body-md {
-  font-family: var(--font-body);
-  font-size: 16px;
-  font-weight: 400;
-  line-height: 1.5;
-  letter-spacing: 0;
-}
-
-.typography-body-sm {
-  font-family: var(--font-body);
-  font-size: 14px;
-  font-weight: 400;
-  line-height: 1.43;
-  letter-spacing: 0;
-}
-
-.typography-rating-display {
-  font-family: var(--font-display);
-  font-size: 64px;
-  font-weight: 700;
-  line-height: 1.1;
-  letter-spacing: -1px;
-}
-
-.typography-button-md {
-  font-family: var(--font-body);
-  font-size: 16px;
-  font-weight: 500;
-  line-height: 1.25;
-  letter-spacing: 0;
-}
-
-.typography-button-sm {
-  font-family: var(--font-body);
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 1.29;
-  letter-spacing: 0;
-}
-
-.typography-uppercase-tag {
-  font-family: var(--font-body);
-  font-size: 8px;
-  font-weight: 700;
-  line-height: 1.25;
-  letter-spacing: 0.32px;
-  text-transform: uppercase;
-}
-
-.typography-caption-sm {
-  font-family: var(--font-body);
-  font-size: 13px;
-  font-weight: 400;
-  line-height: 1.23;
-  letter-spacing: 0;
-}
-
 /* ── Scrollbar ── */
+
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--color-hairline); border-radius: 10px; }
-::-webkit-scrollbar-thumb:hover { background: var(--color-muted); }
 
-/* ── Phone Bezel (Preserved Presentation Frame) ── */
+/* ── Phone Bezel (decorative device frame — not tokenized) ── */
+
 .phone-bezel {
   width: 360px;
   flex: none;
@@ -282,7 +96,8 @@ input, select, textarea { font-family: inherit; }
   flex-direction: column;
 }
 
-/* ── Table Cards (Kullina Token Mapping) ── */
+/* ── Table Cards ── */
+
 .table-card {
   position: relative;
   background: var(--color-canvas);
@@ -294,19 +109,19 @@ input, select, textarea { font-family: inherit; }
   box-shadow: var(--shadow-flat);
   transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
 }
-/* Kullina no-hover-color policy: elevation lift only on hover */
 .table-card:hover {
-  box-shadow: var(--shadow-card-float);
+  box-shadow: var(--shadow-card);
   transform: translateY(-1px);
 }
 .table-card:active { transform: scale(0.98); }
 .table-card.selected {
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px rgba(255, 87, 34, 0.2), var(--shadow-card-float);
+  box-shadow: 0 0 0 2px rgba(255, 87, 34, 0.2), var(--shadow-card);
   background: var(--color-canvas);
 }
 
-/* ── Kitchen KDS Light Ticket Card ── */
+/* ── Kitchen KDS Ticket Card ── */
+
 .kds-ticket {
   background: var(--color-canvas);
   color: var(--color-ink);
@@ -320,11 +135,12 @@ input, select, textarea { font-family: inherit; }
   overflow: hidden;
 }
 .kds-ticket:hover {
-  box-shadow: var(--shadow-card-float);
+  box-shadow: var(--shadow-card);
 }
 .ticket-inner { padding: var(--spacing-base); }
 
 /* ── Skeleton Loaders ── */
+
 @keyframes shimmer {
   0%   { background-position: -200px 0; }
   100% { background-position: 200px 0; }
@@ -334,40 +150,27 @@ input, select, textarea { font-family: inherit; }
   background-size: 400px 100%;
   animation: shimmer 1.5s infinite linear;
 }
-.skeleton-card {
-  border-radius: var(--radius-md);
-  height: 90px;
-  width: 100%;
-}
-.skeleton-badge {
-  border-radius: var(--radius-full);
-  height: 20px;
-  width: 60px;
-}
-.skeleton-input {
-  border-radius: var(--radius-sm);
-  height: 56px;
-  width: 100%;
-}
+.skeleton-card { border-radius: var(--radius-md); height: 90px; width: 100%; }
+.skeleton-badge { border-radius: var(--radius-full); height: 20px; width: 60px; }
+.skeleton-input { border-radius: var(--radius-sm); height: 56px; width: 100%; }
 
-/* ── Form Error States (Section 6.3 Spec) ── */
+/* ── Form Error States ── */
+
 .input-error {
-  border: 2px solid var(--color-primary-error-text) !important;
+  border: 2px solid var(--color-error-text) !important;
   background: var(--color-canvas) !important;
 }
 .form-error-helper {
-  color: var(--color-primary-error-text);
+  color: var(--color-error-text);
   font-family: var(--font-body);
   font-size: 13px;
   font-weight: 400;
   line-height: 1.23;
   margin-top: var(--spacing-xs);
 }
-.form-error-helper:hover {
-  color: var(--color-primary-error-text-hover);
-}
 
 /* ── Utility Badges ── */
+
 .badge {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 3px 9px; border-radius: var(--radius-full);
@@ -376,12 +179,13 @@ input, select, textarea { font-family: inherit; }
   line-height: 1.25; letter-spacing: 0.32px;
   text-transform: uppercase;
 }
-.badge-green { background: var(--status-green-bg); color: var(--status-green-text); border: 1px solid var(--status-green-border); }
-.badge-rust  { background: var(--status-rust-bg);  color: var(--status-rust-text);  border: 1px solid var(--status-rust-border);  }
-.badge-amber { background: var(--status-amber-bg); color: var(--status-amber-text); border: 1px solid var(--status-amber-border); }
-.badge-blue  { background: var(--status-blue-bg);  color: var(--status-blue-text);  border: 1px solid var(--status-blue-border);  }
+.badge-success { background: var(--color-success-bg); color: var(--color-success-text); border: 1px solid var(--color-success-border); }
+.badge-error   { background: var(--color-error-bg);   color: var(--color-error-text);   border: 1px solid var(--color-error-border);   }
+.badge-warning { background: var(--color-warning-bg); color: var(--color-warning-text); border: 1px solid var(--color-warning-border); }
+.badge-info    { background: var(--color-info-bg);    color: var(--color-info-text);    border: 1px solid var(--color-info-border);    }
 
 /* ── Card Containers ── */
+
 .card {
   background: var(--color-canvas);
   border: 1px solid var(--color-hairline);
@@ -390,7 +194,7 @@ input, select, textarea { font-family: inherit; }
   transition: box-shadow 0.15s ease;
 }
 .card:hover {
-  box-shadow: var(--shadow-card-float);
+  box-shadow: var(--shadow-card);
 }
 .card-header {
   padding: var(--spacing-md) var(--spacing-base);
@@ -400,6 +204,7 @@ input, select, textarea { font-family: inherit; }
 .card-body { padding: var(--spacing-base); }
 
 /* ── Input Styles ── */
+
 .input {
   width: 100%;
   height: 56px;
@@ -417,11 +222,12 @@ input, select, textarea { font-family: inherit; }
 .input::placeholder { color: var(--color-muted); }
 
 /* ── Button Styles ── */
+
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   height: 48px; padding: 0 var(--spacing-lg); border-radius: var(--radius-sm);
   font-family: var(--font-body); font-weight: 500; font-size: 16px; line-height: 1.25;
-  cursor: pointer; transition: background-color 0.15s ease, transform 0.1s ease; border: none;
+  cursor: pointer; transition: box-shadow 0.15s ease, transform 0.1s ease; border: none;
 }
 .btn-primary {
   background: var(--color-primary); color: var(--color-on-primary);
@@ -435,20 +241,22 @@ input, select, textarea { font-family: inherit; }
 .btn:disabled { background: var(--color-primary-disabled); color: var(--color-muted-soft); cursor: not-allowed; }
 
 /* ── Pill Group & Tabs ── */
+
 .pill-group {
   display: flex; gap: 4px;
   background: var(--color-surface-soft); border: 1px solid var(--color-hairline);
   border-radius: var(--radius-full); padding: 4px;
 }
 .pill-btn {
-  padding: 6px 14px; border-radius: var(--radius-full);
+  padding: 8px 16px; border-radius: var(--radius-full);
+  min-height: 44px;
   font-family: var(--font-body); font-size: 14px; font-weight: 500; line-height: 1.29;
-  color: var(--color-muted); transition: all 0.15s; border: none; cursor: pointer;
+  color: var(--color-muted); transition: box-shadow 0.15s; border: none; cursor: pointer;
 }
-.pill-btn.active { background: var(--color-primary); color: #ffffff; }
-.pill-btn:hover:not(.active) { color: var(--color-ink); }
+.pill-btn.active { background: var(--color-primary); color: var(--color-on-primary); }
 
 /* ── Animations ── */
+
 @keyframes printIn {
   0%   { opacity: 0; transform: translateY(-12px); }
   100% { opacity: 1; transform: translateY(0); }
