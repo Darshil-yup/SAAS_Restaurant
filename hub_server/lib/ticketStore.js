@@ -143,14 +143,18 @@ class TicketStore {
 
   clearTableTickets(tableId, restaurantId) {
     let clearedCount = 0;
+    const clearedTickets = [];
     const updatedList = this.tickets.map(t => {
       const matchTable = String(t.table_id) === String(tableId) || 
                          String(t.table_name).toLowerCase() === `t${tableId}`.toLowerCase() || 
                          String(t.table_name).toLowerCase() === `table ${tableId}`.toLowerCase() ||
-                         String(t.table_name) === String(tableId);
+                         String(t.table_name) === String(tableId) ||
+                         String(t.id) === String(tableId);
       if (matchTable && (t.status === 'in_progress' || t.status === 'ready')) {
         clearedCount++;
-        return { ...t, status: 'completed', updated_at: new Date().toISOString() };
+        const updated = { ...t, status: 'completed', updated_at: new Date().toISOString() };
+        clearedTickets.push(updated);
+        return updated;
       }
       return t;
     });
@@ -158,7 +162,7 @@ class TicketStore {
     if (clearedCount > 0) {
       this.saveTickets(updatedList);
     }
-    return clearedCount;
+    return { clearedCount, clearedTickets };
   }
 
   getActiveTickets(restaurantId) {

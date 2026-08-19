@@ -15,7 +15,11 @@ const KitchenHubApp = () => {
   const [checkedItems, setCheckedItems] = useState({});
   const [loading, setLoading] = useState(true);
 
-  const hubHost = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:4000';
+  const hubHost = typeof window !== 'undefined'
+    ? (window.location.port === '4000'
+        ? window.location.origin
+        : `${window.location.protocol}//${window.location.hostname}:4000`)
+    : 'http://localhost:4000';
 
   // 1. Fetch Pairing & QR Info
   const fetchPairing = async () => {
@@ -85,8 +89,8 @@ const KitchenHubApp = () => {
     fetchActiveTickets();
     fetchSyncStatus();
 
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${window.location.host}/live`;
+    const wsHost = hubHost.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
+    const wsUrl = `${wsHost}/live`;
     let ws;
 
     const connectWs = () => {
@@ -96,6 +100,8 @@ const KitchenHubApp = () => {
         ws.onopen = () => {
           missedWsFailuresRef.current = 0;
           setWsConnStatus('connected');
+          fetchPairing();
+          fetchQr();
           console.log('⚡ Connected to Hub Server WebSocket');
         };
 
@@ -117,6 +123,8 @@ const KitchenHubApp = () => {
                 }
                 return t;
               }));
+            } else if (msg.type === 'CLEAR_TABLE') {
+              fetchActiveTickets();
             } else if (msg.type === 'SYNC_STATUS_CHANGE') {
               setSyncStatus(msg.payload);
               // Refresh tickets to update synced_to_cloud badge
@@ -150,8 +158,10 @@ const KitchenHubApp = () => {
 
     connectWs();
 
-    // Poll sync status & tickets periodically as fallback
+    // Poll pairing info, sync status & tickets periodically as fallback
     const interval = setInterval(() => {
+      fetchPairing();
+      fetchQr();
       fetchSyncStatus();
       fetchActiveTickets();
     }, 10000);

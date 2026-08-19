@@ -33,9 +33,22 @@ export const FloorGrid = ({ selectedTable, onSelectTable, tables: propTables, on
   const shown = selectedSection === 'All' ? tables : tables.filter(t => t.section === selectedSection);
 
 
+  const [clearedTableIds, setClearedTableIds] = React.useState({});
+
   if (isLoading) {
     return <FloorGridSkeleton />;
   }
+
+  const handleClearClick = async (e, tableId) => {
+    e.stopPropagation();
+    if (clearedTableIds[tableId]) return;
+    setClearedTableIds(prev => ({ ...prev, [tableId]: true }));
+    try {
+      await clearTableBill(tableId);
+    } finally {
+      setClearedTableIds(prev => ({ ...prev, [tableId]: false }));
+    }
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -116,16 +129,19 @@ export const FloorGrid = ({ selectedTable, onSelectTable, tables: propTables, on
 
               {t.status === 'ready' && (
                 <button
-                  onClick={e => { e.stopPropagation(); clearTableBill(t.id); }}
+                  onClick={e => handleClearClick(e, t.id)}
+                  disabled={!!clearedTableIds[t.id]}
                   className="typography-uppercase-tag"
                   style={{
                     marginTop: '6px', width: '100%', padding: '4px 0',
                     borderRadius: 'var(--radius-sm)',
                     background: 'var(--status-blue-bg)', color: 'var(--status-blue-text)',
-                    border: '1px solid var(--status-blue-border)', cursor: 'pointer'
+                    border: '1px solid var(--status-blue-border)',
+                    cursor: clearedTableIds[t.id] ? 'not-allowed' : 'pointer',
+                    opacity: clearedTableIds[t.id] ? 0.6 : 1
                   }}
                 >
-                  Clear Bill
+                  {clearedTableIds[t.id] ? 'Clearing…' : 'Clear Bill'}
                 </button>
               )}
             </div>

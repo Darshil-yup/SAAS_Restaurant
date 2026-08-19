@@ -303,7 +303,14 @@ app.post('/tables/:id/clear', (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const tableId = req.params.id;
 
-  const clearedCount = ticketStore.clearTableTickets(tableId, pairing.restaurant_id);
+  const { clearedCount, clearedTickets } = ticketStore.clearTableTickets(tableId, pairing.restaurant_id);
+
+  // Queue corresponding Supabase status updates (orders.status = 'completed') cloud-async
+  if (clearedTickets && clearedTickets.length > 0) {
+    clearedTickets.forEach(t => {
+      syncQueue.enqueueStatusUpdate(t.ticket_number || t.id, 'completed', pairing.restaurant_id);
+    });
+  }
 
   // Broadcast CLEAR_TABLE event to all WS clients over LAN
   broadcast('CLEAR_TABLE', {
@@ -312,9 +319,39 @@ app.post('/tables/:id/clear', (req, res) => {
   });
 
   const updatedTables = getLiveTables(pairing.restaurant_id);
+  console.log(`🧹 Cleared bill for Table ${tableId} (${clearedCount} ticket(s) completed, queued for cloud sync)`);
+
   res.json({
     success: true,
     table_id: tableId,
+    cleared_count: clearedCount,
+    tables: updatedTables
+  });
+});
+
+app.post('/orders/:id/clear', (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const id = req.params.id;
+
+  const { clearedCount, clearedTickets } = ticketStore.clearTableTickets(id, pairing.restaurant_id);
+
+  if (clearedTickets && clearedTickets.length > 0) {
+    clearedTickets.forEach(t => {
+      syncQueue.enqueueStatusUpdate(t.ticket_number || t.id, 'completed', pairing.restaurant_id);
+    });
+  }
+
+  broadcast('CLEAR_TABLE', {
+    table_id: Number(id) || id,
+    cleared_count: clearedCount
+  });
+
+  const updatedTables = getLiveTables(pairing.restaurant_id);
+  console.log(`🧹 Cleared bill for Order/Table ${id} (${clearedCount} ticket(s) completed, queued for cloud sync)`);
+
+  res.json({
+    success: true,
+    id,
     cleared_count: clearedCount,
     tables: updatedTables
   });

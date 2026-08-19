@@ -182,12 +182,27 @@ export const WaiterApp = () => {
   }, [hubUrl, fetchLiveState]);
 
   // Handle Clearing Table Bill
-  const handleClearTableBill = (tableId) => {
+  const handleClearTableBill = async (tableId) => {
     setDrafts(p => {
       const c = { ...p };
       delete c[tableId];
       return c;
     });
+
+    if (!hubUrl) return;
+    const cleanUrl = hubUrl.replace(/\/+$/, '');
+    try {
+      const res = await fetch(`${cleanUrl}/tables/${tableId}/clear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (res.ok) {
+        console.log(`🧹 Clear bill request for table ${tableId} succeeded on Hub`);
+        fetchLiveState(cleanUrl);
+      }
+    } catch (err) {
+      console.error(`Failed to clear bill for table ${tableId}:`, err);
+    }
   };
 
   const handlePairSubmit = async (e) => {
