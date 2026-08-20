@@ -163,7 +163,7 @@ export const ServerLaptopApp = () => {
   const [activeTab, setActiveTab] = useState('kds');
   const {
     tables, tickets, cloudOnline, cloudQueue, waitlist, hubStatus,
-    currentRestaurant, hasModuleAccess, changeRestaurantPlan
+    currentRestaurant, hasModuleAccess, changeRestaurantPlan, isMenuUninitialized
   } = usePos();
 
   const badges = {
@@ -183,6 +183,17 @@ export const ServerLaptopApp = () => {
       overflow: 'hidden',
       boxShadow: 'var(--shadow-card-float)',
     }}>
+      {/* Uninitialized Cache Warning Banner */}
+      {isMenuUninitialized && (
+        <div style={{
+          background: 'rgba(245, 158, 11, 0.2)', borderBottom: '1px solid rgba(245, 158, 11, 0.4)',
+          padding: '12px 24px', display: 'flex', alignItems: 'center', gap: '10px',
+          fontSize: '13px', color: '#fbbf24', fontWeight: 600
+        }}>
+          <span style={{ fontSize: '18px' }}>⚠️</span>
+          <span>No menu data available — connect this hub to the internet once to complete setup.</span>
+        </div>
+      )}
       {/* Laptop Top Bar */}
       <div style={{
         background: 'var(--color-surface-soft)',

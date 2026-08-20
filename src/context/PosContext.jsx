@@ -166,17 +166,20 @@ export const PosProvider = ({ children }) => {
 
   // Hub Server Status & Active Ticket Synchronizer
   const [hubStatus, setHubStatus] = useState({ queued: 0, online: true, isHubConnected: false });
+  const [isMenuUninitialized, setIsMenuUninitialized] = useState(false);
 
-  // 1. Fetch active tickets from Hub Server GET /orders/active on load/connect
+  // 1. Fetch active tickets, menu, and tables from Hub Server on load/connect
   useEffect(() => {
     const fetchHubData = async () => {
       const hostname = typeof window !== 'undefined' ? (window.location.hostname || 'localhost') : 'localhost';
       const hubBaseUrl = `http://${hostname}:4000`;
 
       try {
-        const [activeRes, statusRes] = await Promise.all([
+        const [activeRes, statusRes, menuRes, tablesLayoutRes] = await Promise.all([
           fetch(`${hubBaseUrl}/orders/active`).catch(() => null),
-          fetch(`${hubBaseUrl}/sync-status`).catch(() => null)
+          fetch(`${hubBaseUrl}/sync-status`).catch(() => null),
+          fetch(`${hubBaseUrl}/menu`).catch(() => null),
+          fetch(`${hubBaseUrl}/tables/layout`).catch(() => null)
         ]);
 
         if (activeRes && activeRes.ok) {
@@ -199,6 +202,40 @@ export const PosProvider = ({ children }) => {
               ...prev,
               [currentRestaurantId]: formattedTickets
             }));
+          }
+        }
+
+        if (menuRes && menuRes.ok) {
+          const menuData = await menuRes.json();
+          if (menuData.uninitialized) {
+            setIsMenuUninitialized(true);
+          } else if (menuData.items && Array.isArray(menuData.items)) {
+            setIsMenuUninitialized(false);
+            setAllMenu(prev => ({
+              ...prev,
+              [currentRestaurantId]: menuData.items
+            }));
+          }
+        }
+
+        if (tablesLayoutRes && tablesLayoutRes.ok) {
+          const layoutData = await tablesLayoutRes.json();
+          if (layoutData.uninitialized) {
+            setIsMenuUninitialized(true);
+          } else if (layoutData.tables && Array.isArray(layoutData.tables)) {
+            setAllTables(prev => {
+              const currentList = prev[currentRestaurantId] || [];
+              const updated = layoutData.tables.map(t => {
+                const existing = currentList.find(c => String(c.id) === String(t.id));
+                return {
+                  ...t,
+                  status: existing?.status || 'available',
+                  occupiedSince: existing?.occupiedSince || null,
+                  activeOrderTotal: existing?.activeOrderTotal || 0
+                };
+              });
+              return { ...prev, [currentRestaurantId]: updated };
+            });
           }
         }
 
@@ -564,6 +601,7 @@ export const PosProvider = ({ children }) => {
       cloudOnline,
       toggleCloudOutage,
       hubStatus,
+      isMenuUninitialized,
       tables,
       menu,
       tickets,

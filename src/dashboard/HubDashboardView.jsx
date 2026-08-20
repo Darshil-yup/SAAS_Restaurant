@@ -175,6 +175,17 @@ export const HubDashboardView = () => {
         </div>
       )}
 
+      {/* Uninitialized Cache Failure Banner */}
+      {(hubData?.uninitialized || hubData?.tables?.uninitialized) && (
+        <div style={{
+          background: 'rgba(245, 158, 11, 0.2)', borderBottom: '1px solid rgba(245, 158, 11, 0.4)',
+          padding: '12px 24px', color: '#fbbf24', fontSize: '13px', fontWeight: 600,
+          display: 'flex', alignItems: 'center', gap: '10px'
+        }}>
+          <AlertTriangle size={18} /> No menu data available — connect this hub to the internet once to complete setup.
+        </div>
+      )}
+
       {/* Main Content Dashboard Layout */}
       <div style={{ flex: 1, padding: '24px', maxWidth: '1400px', width: '100%', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
         

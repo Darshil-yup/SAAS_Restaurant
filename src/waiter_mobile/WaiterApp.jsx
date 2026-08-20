@@ -7,11 +7,12 @@ import { motion, useReducedMotion } from 'framer-motion';
 import { usePos } from '../context/PosContext';
 
 export const WaiterApp = () => {
-  const { currentRestaurant } = usePos() || {};
+  const { currentRestaurant, isMenuUninitialized: posMenuUninitialized } = usePos() || {};
   const shouldReduceMotion = useReducedMotion();
   const [selectedTableId, setSelectedTableId] = useState(null);
   const [drafts, setDrafts] = useState({});
   const [activeTab, setActiveTab] = useState('floor');
+  const [hubMenuUninitialized, setHubMenuUninitialized] = useState(false);
 
   // Hub Connection & Pairing State
   const defaultHub = typeof window !== 'undefined' 
@@ -36,17 +37,30 @@ export const WaiterApp = () => {
   const wasConnectedRef = useRef(false);
   const isGracePeriodRef = useRef(true);
 
-  // 1. Fetch Live Tables & Open Orders from Hub Server
+  // 1. Fetch Live Tables, Open Orders, and Menu state from Hub Server
   const fetchLiveState = useCallback(async (targetUrl = hubUrl) => {
     const cleanUrl = targetUrl.replace(/\/+$/, '');
     try {
-      const [tablesRes, ordersRes] = await Promise.all([
+      const [tablesRes, ordersRes, menuRes] = await Promise.all([
         fetch(`${cleanUrl}/tables`).catch(() => null),
-        fetch(`${cleanUrl}/orders/active`).catch(() => null)
+        fetch(`${cleanUrl}/orders/active`).catch(() => null),
+        fetch(`${cleanUrl}/menu`).catch(() => null)
       ]);
+
+      if (menuRes && menuRes.ok) {
+        const menuData = await menuRes.json();
+        if (menuData.uninitialized) {
+          setHubMenuUninitialized(true);
+        } else {
+          setHubMenuUninitialized(false);
+        }
+      }
 
       if (tablesRes && tablesRes.ok) {
         const data = await tablesRes.json();
+        if (data.uninitialized) {
+          setHubMenuUninitialized(true);
+        }
         if (data.tables && Array.isArray(data.tables)) {
           setLiveTables(data.tables);
         }
@@ -403,6 +417,18 @@ export const WaiterApp = () => {
             >
               Connect
             </button>
+          </div>
+        )}
+
+        {/* Uninitialized Cache & Offline Failure Banner */}
+        {(hubMenuUninitialized || posMenuUninitialized) && (
+          <div style={{
+            background: 'rgba(245, 158, 11, 0.2)', borderBottom: '1px solid rgba(245, 158, 11, 0.4)',
+            padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px',
+            fontSize: '12px', color: '#fbbf24', fontWeight: 600
+          }}>
+            <span style={{ fontSize: '16px' }}>⚠️</span>
+            <span>No menu data available — connect this hub to the internet once to complete setup.</span>
           </div>
         )}
 

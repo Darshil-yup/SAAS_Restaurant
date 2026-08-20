@@ -1,0 +1,86 @@
+{
+  "restaurant_id": "11111111-1111-1111-1111-111111111111",
+  "categories": [
+    "Starters",
+    "Main Course",
+    "Breads & Rice",
+    "Desserts",
+    "Beverages"
+  ],
+  "items": [
+    {
+      "id": "m1",
+      "name": "Paneer Butter Masala",
+      "price": 280,
+      "category": "Main Course",
+      "isVeg": true,
+      "available": true
+    },
+    {
+      "id": "m2",
+      "name": "Dal Tadka",
+      "price": 190,
+      "category": "Main Course",
+      "isVeg": true,
+      "available": true
+    },
+    {
+      "id": "m3",
+      "name": "Chicken Tikka Masala",
+      "price": 340,
+      "category": "Main Course",
+      "isVeg": false,
+      "available": true
+    },
+    {
+      "id": "m4",
+      "name": "Butter Naan",
+      "price": 45,
+      "category": "Breads & Rice",
+      "isVeg": true,
+      "available": true
+    },
+    {
+      "id": "m5",
+      "name": "Jeera Rice",
+      "price": 140,
+      "category": "Breads & Rice",
+      "isVeg": true,
+      "available": true
+    },
+    {
+      "id": "m6",
+      "name": "Veg Crispy",
+      "price": 220,
+      "category": "Starters",
+      "isVeg": true,
+      "available": true
+    },
+    {
+      "id": "m7",
+      "name": "Chicken 65",
+      "price": 290,
+      "category": "Starters",
+      "isVeg": false,
+      "available": true
+    },
+    {
+      "id": "m8",
+      "name": "Gulab Jamun (2 pcs)",
+      "price": 90,
+      "category": "Desserts",
+      "isVeg": true,
+      "available": true
+    },
+    {
+      "id": "m9",
+      "name": "Masala Chaas",
+      "price": 50,
+      "category": "Beverages",
+      "isVeg": true,
+      "available": true
+    }
+  ],
+  "last_synced_at": "2026-08-20T16:35:36.965Z",
+  "uninitialized": false
+}

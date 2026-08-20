@@ -81,11 +81,15 @@ export const RapidOrderBuilder = ({ selectedTableId, draftItems, onAddItem, onRe
 
       {/* Dish List */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '280px', overflowY: 'auto' }}>
-        {filtered.length === 0 && (
+        {menu.length === 0 ? (
+          <div style={{ padding: '24px', textAlign: 'center', color: '#f59e0b', fontSize: '13px', background: 'rgba(245, 158, 11, 0.1)', border: '1px dashed rgba(245, 158, 11, 0.3)', borderRadius: '8px' }}>
+            ⚠️ No menu data available — connect this hub to the internet once to complete setup.
+          </div>
+        ) : filtered.length === 0 ? (
           <div style={{ padding: '24px', textAlign: 'center', color: 'var(--color-muted)', fontSize: '13px' }}>
             No items match your search.
           </div>
-        )}
+        ) : null}
         {filtered.map(item => {
           const qty = draftItems[item.id] || 0;
           return (

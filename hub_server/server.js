@@ -13,6 +13,7 @@ import { hubConfig } from './lib/hubConfig.js';
 import { ticketStore } from './lib/ticketStore.js';
 import { syncQueue } from './lib/syncQueue.js';
 import { authenticateHubStaff } from './lib/supabaseClient.js';
+import { restaurantCache } from './lib/restaurantCache.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -96,7 +97,9 @@ wss.on('connection', (ws, req) => {
     payload: {
       pairing,
       sync: syncQueue.getStatus(),
-      active_tickets_count: ticketStore.getActiveTickets(pairing.restaurant_id).length
+      active_tickets_count: ticketStore.getActiveTickets(pairing.restaurant_id).length,
+      menu: restaurantCache.getMenuCache(pairing.restaurant_id),
+      tables_layout: restaurantCache.getTablesCache(pairing.restaurant_id)
     }
   }));
 
@@ -257,6 +260,20 @@ app.post('/orders/:id/ready', (req, res) => {
   });
 });
 
+// 5b. GET /menu — Returns cached menu from local file disk cache
+app.get('/menu', (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const menuData = restaurantCache.getMenuCache(pairing.restaurant_id);
+  res.json(menuData);
+});
+
+// 5c. GET /tables/layout — Returns cached static table layout from local disk cache
+app.get('/tables/layout', (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const layoutData = restaurantCache.getTablesCache(pairing.restaurant_id);
+  res.json(layoutData);
+});
+
 // Master Table Floor Grid Layout (Single source of truth for Hub)
 const MASTER_TABLES = [
   { id: 1, name: 'T1', section: 'Main Hall', capacity: 2 },
@@ -275,7 +292,10 @@ const MASTER_TABLES = [
 
 function getLiveTables(restaurantId) {
   const activeTickets = ticketStore.getActiveTickets(restaurantId);
-  return MASTER_TABLES.map(table => {
+  const layoutData = restaurantCache.getTablesCache(restaurantId);
+  const baseTables = (layoutData && layoutData.tables && layoutData.tables.length > 0) ? layoutData.tables : MASTER_TABLES;
+
+  return baseTables.map(table => {
     const tableTickets = activeTickets.filter(t => 
       String(t.table_id) === String(table.id) || 
       String(t.table_name).toLowerCase() === table.name.toLowerCase() ||
@@ -308,8 +328,11 @@ function getLiveTables(restaurantId) {
 app.get('/tables', (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const liveTables = getLiveTables(pairing.restaurant_id);
+  const layout = restaurantCache.getTablesCache(pairing.restaurant_id);
+
   res.json({
     restaurant_id: pairing.restaurant_id,
+    uninitialized: layout.uninitialized || false,
     count: liveTables.length,
     tables: liveTables
   });
@@ -474,6 +497,9 @@ app.get('/', async (req, res) => {
   const syncStatus = syncQueue.getStatus();
 
 
+  const menuCache = restaurantCache.getMenuCache(pairing.restaurant_id);
+  const isUninitialized = menuCache.uninitialized;
+
   const html = `
   <!DOCTYPE html>
   <html lang="en">
@@ -565,6 +591,12 @@ app.get('/', async (req, res) => {
   </head>
   <body>
     <div class="container">
+      ${isUninitialized ? `
+        <div style="background: rgba(245, 158, 11, 0.2); border: 1px solid var(--amber); color: var(--amber); padding: 14px 20px; border-radius: 10px; font-weight: 700; font-size: 14px; margin-bottom: 20px; display: flex; align-items: center; gap: 10px;">
+          <span>⚠️</span>
+          <span>No menu data available — connect this hub to the internet once to complete setup.</span>
+        </div>
+      ` : ''}
       <div class="header">
         <div>
           <h1 style="margin:0; font-size: 22px; color: var(--text)">⚡ Hotel Mejwani Reception Hub Server</h1>
@@ -685,6 +717,8 @@ server.listen(PORT, '0.0.0.0', () => {
   const pairingInfo = hubConfig.getPairingInfo();
   if (pairingInfo.restaurant_id) {
     authenticateHubStaff(pairingInfo.restaurant_id);
+    // Initialize Local Persisted Menu & Tables Disk Cache
+    restaurantCache.initCache(pairingInfo.restaurant_id, broadcast);
   }
 
   // Start background sync retry loop

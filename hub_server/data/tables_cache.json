@@ -1,0 +1,80 @@
+{
+  "restaurant_id": "11111111-1111-1111-1111-111111111111",
+  "count": 12,
+  "tables": [
+    {
+      "id": 1,
+      "name": "T1",
+      "section": "Main Hall",
+      "capacity": 2
+    },
+    {
+      "id": 2,
+      "name": "T2",
+      "section": "Main Hall",
+      "capacity": 2
+    },
+    {
+      "id": 3,
+      "name": "T3",
+      "section": "Main Hall",
+      "capacity": 4
+    },
+    {
+      "id": 4,
+      "name": "T4",
+      "section": "Main Hall",
+      "capacity": 4
+    },
+    {
+      "id": 5,
+      "name": "T5",
+      "section": "Main Hall",
+      "capacity": 6
+    },
+    {
+      "id": 6,
+      "name": "T6",
+      "section": "Main Hall",
+      "capacity": 6
+    },
+    {
+      "id": 7,
+      "name": "T7",
+      "section": "AC Room",
+      "capacity": 4
+    },
+    {
+      "id": 8,
+      "name": "T8",
+      "section": "AC Room",
+      "capacity": 4
+    },
+    {
+      "id": 9,
+      "name": "T9",
+      "section": "AC Room",
+      "capacity": 6
+    },
+    {
+      "id": 10,
+      "name": "T10",
+      "section": "Family Room",
+      "capacity": 8
+    },
+    {
+      "id": 11,
+      "name": "T11",
+      "section": "Family Room",
+      "capacity": 8
+    },
+    {
+      "id": 12,
+      "name": "T12",
+      "section": "Family Room",
+      "capacity": 10
+    }
+  ],
+  "last_synced_at": "2026-08-20T16:35:37.670Z",
+  "uninitialized": false
+}
