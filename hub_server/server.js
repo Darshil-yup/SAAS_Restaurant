@@ -14,6 +14,8 @@ import { ticketStore } from './lib/ticketStore.js';
 import { syncQueue } from './lib/syncQueue.js';
 import { authenticateHubStaff } from './lib/supabaseClient.js';
 import { restaurantCache } from './lib/restaurantCache.js';
+import { priceOrder } from './lib/pricing.js';
+import { deviceAuth, requireDevice, extractToken, isLoopback, trustLocalAddress } from './lib/deviceAuth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,8 +24,24 @@ const PORT = process.env.PORT || 4000;
 const app = express();
 const server = http.createServer(app);
 
-app.use(cors());
-app.use(express.json());
+// CORS is restricted to LAN/loopback origins. A wildcard here let any website a
+// staff phone opened silently POST to the POS (e.g. /tables/1/clear).
+const PRIVATE_HOST = /^(localhost|127\.0\.0\.1|\[?::1\]?|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)$/;
+
+app.use(cors({
+  origin(origin, callback) {
+    // Non-browser clients (handset fetch, curl) send no Origin at all.
+    if (!origin) return callback(null, true);
+    try {
+      const { hostname } = new URL(origin);
+      return callback(null, PRIVATE_HOST.test(hostname));
+    } catch {
+      return callback(null, false);
+    }
+  },
+  credentials: true
+}));
+app.use(express.json({ limit: '256kb' }));
 
 // -------------------------------------------------------------
 // LAN IP Detection Helper
@@ -53,6 +71,10 @@ function getLanIp() {
 const LAN_IP = getLanIp();
 const SERVER_URL = `http://${LAN_IP}:${PORT}`;
 
+// The KDS is often opened as http://<LAN-IP>:4000 on the reception laptop itself.
+// Those requests are not loopback but do come from this same machine.
+trustLocalAddress(LAN_IP);
+
 // -------------------------------------------------------------
 // WebSocket Layer (Live Real-Time Push to Kitchen KDS & Waiter Handsets)
 // -------------------------------------------------------------
@@ -60,14 +82,24 @@ const wss = new WebSocketServer({ noServer: true });
 const connectedClients = new Set();
 
 server.on('upgrade', (request, socket, head) => {
-  const { pathname } = new URL(request.url, `http://${request.headers.host}`);
-  if (pathname === '/live' || pathname === '/ws') {
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit('connection', ws, request);
-    });
-  } else {
-    socket.destroy();
+  const url = new URL(request.url, `http://${request.headers.host}`);
+  const { pathname } = url;
+
+  if (pathname !== '/live' && pathname !== '/ws') {
+    return socket.destroy();
   }
+
+  // The live feed carries every ticket and table total, so it needs the same
+  // authorisation as the REST endpoints.
+  const token = url.searchParams.get('token');
+  if (!isLoopback(request) && !deviceAuth.verifyToken(token)) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+    return socket.destroy();
+  }
+
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.emit('connection', ws, request);
+  });
 });
 
 function broadcast(type, payload) {
@@ -90,12 +122,20 @@ wss.on('connection', (ws, req) => {
   connectedClients.add(ws);
   console.log(`📱 Client connected over LAN WebSocket (Total active: ${connectedClients.size})`);
 
-  // Send initial connection handshake with pairing & sync info
+  // Send initial connection handshake with pairing & sync info.
+  // Only safe fields: the raw config carries the enrollment code and the
+  // issued device token hashes.
   const pairing = hubConfig.getPairingInfo();
+  const safePairing = {
+    paired: pairing.paired,
+    restaurant_id: pairing.restaurant_id,
+    name: pairing.name,
+    city: pairing.city
+  };
   ws.send(JSON.stringify({
     type: 'CONNECTED',
     payload: {
-      pairing,
+      pairing: safePairing,
       sync: syncQueue.getStatus(),
       active_tickets_count: ticketStore.getActiveTickets(pairing.restaurant_id).length,
       menu: restaurantCache.getMenuCache(pairing.restaurant_id),
@@ -129,20 +169,44 @@ syncQueue.onStatusChange((status) => {
 // HTTP REST Endpoints
 // -------------------------------------------------------------
 
-// 1. GET /pairing-info
+// 0. POST /auth/device — exchange the KDS-displayed enrollment code for a token
+app.post('/auth/device', (req, res) => {
+  const ip = req.socket.remoteAddress || 'unknown';
+  const result = deviceAuth.enroll(req.body?.enrollment_code, req.body?.device_label || 'Handset', ip);
+
+  if (!result.ok) {
+    console.warn(`🔒 Device enrollment refused for ${ip}: ${result.error}`);
+    return res.status(result.status).json({ error: result.error });
+  }
+
+  console.log(`🔓 Device enrolled from ${ip} (${req.body?.device_label || 'Handset'})`);
+  res.json({ success: true, device_token: result.device_token, expires_at: result.expires_at });
+});
+
+// 1. GET /pairing-info — public health probe used by handsets before enrolling.
+// Deliberately omits enrollment_code, kitchen_pin and issued device tokens:
+// this endpoint is reachable by anything on the LAN.
 app.get('/pairing-info', (req, res) => {
   const info = hubConfig.getPairingInfo();
+  const authorised = isLoopback(req) || deviceAuth.verifyToken(extractToken(req));
+
   res.json({
-    ...info,
+    paired: info.paired,
+    restaurant_id: info.restaurant_id,
+    name: info.name,
+    city: info.city,
     lan_ip: LAN_IP,
     port: PORT,
     server_url: SERVER_URL,
-    ws_url: `ws://${LAN_IP}:${PORT}/live`
+    ws_url: `ws://${LAN_IP}:${PORT}/live`,
+    authorised,
+    // Shown on the KDS screen itself so staff can read the code off the display.
+    ...(isLoopback(req) ? { enrollment_code: deviceAuth.getEnrollmentCode(), pairing_code: info.pairing_code } : {})
   });
 });
 
 // 2. POST /pair
-app.post('/pair', async (req, res) => {
+app.post('/pair', requireDevice, async (req, res) => {
   const { pairing_code } = req.body;
   const result = await hubConfig.pairWithCode(pairing_code);
   if (result.success) {
@@ -157,7 +221,7 @@ app.post('/pair', async (req, res) => {
 const recentRequests = new Map();
 
 // 3. POST /orders — Waiter submits order over local WiFi
-app.post('/orders', (req, res) => {
+app.post('/orders', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   if (!pairing.paired) {
     return res.status(400).json({ error: 'Hub server is not paired to a restaurant yet.' });
@@ -181,8 +245,17 @@ app.post('/orders', (req, res) => {
     });
   }
 
+  // Step 0: Re-price the order against the hub's own menu. Prices and names in
+  // the request body are ignored entirely -- a tampered handset must not be able
+  // to set what a guest is billed.
+  const priced = priceOrder(orderData.items, pairing.restaurant_id);
+  if (!priced.ok) {
+    console.warn(`🧾 Order rejected at pricing: ${priced.error}`, priced.details || '');
+    return res.status(400).json({ error: priced.error, code: priced.code, details: priced.details });
+  }
+
   // Step 1: Assign ticket number & update memory store
-  const newTicket = ticketStore.addTicket(orderData, pairing.restaurant_id);
+  const newTicket = ticketStore.addTicket(orderData, pairing.restaurant_id, priced);
 
   // Step 2: Instantly push ticket to all connected Kitchen Display & Waiter WS clients over LAN BEFORE disk write
   const orderCreatedPayload = {
@@ -218,7 +291,7 @@ app.post('/orders', (req, res) => {
 });
 
 // 4. GET /orders/active — Kitchen display restores open tickets on connect/reload
-app.get('/orders/active', (req, res) => {
+app.get('/orders/active', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const activeTickets = ticketStore.getActiveTickets(pairing.restaurant_id);
   res.json({
@@ -229,7 +302,7 @@ app.get('/orders/active', (req, res) => {
 });
 
 // 5. POST /orders/:id/ready — Kitchen marks ticket ready
-app.post('/orders/:id/ready', (req, res) => {
+app.post('/orders/:id/ready', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const ticketId = req.params.id;
 
@@ -261,14 +334,14 @@ app.post('/orders/:id/ready', (req, res) => {
 });
 
 // 5b. GET /menu — Returns cached menu from local file disk cache
-app.get('/menu', (req, res) => {
+app.get('/menu', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const menuData = restaurantCache.getMenuCache(pairing.restaurant_id);
   res.json(menuData);
 });
 
 // 5c. GET /tables/layout — Returns cached static table layout from local disk cache
-app.get('/tables/layout', (req, res) => {
+app.get('/tables/layout', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const layoutData = restaurantCache.getTablesCache(pairing.restaurant_id);
   res.json(layoutData);
@@ -325,7 +398,7 @@ function getLiveTables(restaurantId) {
 }
 
 // 6. GET /tables — Live Floor Grid table state derived from active tickets
-app.get('/tables', (req, res) => {
+app.get('/tables', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const liveTables = getLiveTables(pairing.restaurant_id);
   const layout = restaurantCache.getTablesCache(pairing.restaurant_id);
@@ -339,7 +412,7 @@ app.get('/tables', (req, res) => {
 });
 
 // 7. POST /tables/:id/clear — Clear table bill after guest payment
-app.post('/tables/:id/clear', (req, res) => {
+app.post('/tables/:id/clear', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const tableId = req.params.id;
 
@@ -374,7 +447,7 @@ app.post('/tables/:id/clear', (req, res) => {
   });
 });
 
-app.post('/orders/:id/clear', (req, res) => {
+app.post('/orders/:id/clear', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const id = req.params.id;
 
@@ -408,15 +481,22 @@ app.post('/orders/:id/clear', (req, res) => {
 });
 
 // 8. GET /sync-status — Check cloud sync queue & online status
-app.get('/sync-status', (req, res) => {
+app.get('/sync-status', requireDevice, (req, res) => {
   res.json({
     ...syncQueue.getStatus(),
     pairing: hubConfig.getPairingInfo()
   });
 });
 
-// 9. POST /toggle-outage — Outage simulator endpoint for testing
+// 9. POST /toggle-outage — Outage simulator. Demo tooling only: it forces the hub
+// offline, so it is restricted to the hub's own screen and can be disabled outright.
 app.post('/toggle-outage', (req, res) => {
+  if (process.env.HUB_DISABLE_OUTAGE_SIM === 'true') {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  if (!isLoopback(req)) {
+    return res.status(403).json({ error: 'Outage simulation is only available on the Kitchen Display.' });
+  }
   syncQueue.isOnline = !syncQueue.isOnline;
   syncQueue.notifyStatusChange();
   if (syncQueue.isOnline) {
@@ -429,11 +509,23 @@ app.post('/toggle-outage', (req, res) => {
 });
 
 // 8. GET /qr — Returns QR code image for pairing (points to Waiter PWA URL)
+// The QR carries a freshly issued device token so scanning it enrols the handset
+// in one step. It is therefore only served to the KDS on the hub itself -- handing
+// this to the LAN would hand out credentials.
 app.get('/qr', async (req, res) => {
+  if (!isLoopback(req)) {
+    return res.status(403).json({ error: 'QR pairing codes are only available on the Kitchen Display.' });
+  }
   try {
-    const waiterUrl = `${SERVER_URL}/waiter`;
+    const { device_token } = deviceAuth.issueToken('Scanned handset');
+    const waiterUrl = `${SERVER_URL}/waiter#t=${device_token}`;
     const qrDataUrl = await QRCode.toDataURL(waiterUrl);
-    res.json({ server_url: SERVER_URL, waiter_url: waiterUrl, qr_code: qrDataUrl });
+    res.json({
+      server_url: SERVER_URL,
+      waiter_url: waiterUrl,
+      qr_code: qrDataUrl,
+      enrollment_code: deviceAuth.getEnrollmentCode()
+    });
   } catch (err) {
     res.status(500).json({ error: 'Failed to generate QR code' });
   }
@@ -446,7 +538,7 @@ if (fs.existsSync(distPath)) {
 }
 
 // 10. GET /dashboard-data — Operational metrics, active & completed tickets, daily totals
-app.get('/dashboard-data', (req, res) => {
+app.get('/dashboard-data', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const liveTables = getLiveTables(pairing.restaurant_id);
   const allTickets = ticketStore.getAllTickets(pairing.restaurant_id);

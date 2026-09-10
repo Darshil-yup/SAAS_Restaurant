@@ -5,6 +5,7 @@ import { OrderDraftDrawer } from './OrderDraftDrawer';
 import { WifiOff, LayoutGrid, Utensils, ShoppingBag, ShieldCheck, Server, RefreshCw } from 'lucide-react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { usePos } from '../context/PosContext';
+import { authFetch, captureTokenFromUrl, enrollWithCode, hasToken } from '../services/hubAuth';
 
 export const WaiterApp = () => {
   const { currentRestaurant, isMenuUninitialized: posMenuUninitialized } = usePos() || {};
@@ -28,6 +29,13 @@ export const WaiterApp = () => {
   const hubConnected = connStatus === 'connected';
   const [showPairModal, setShowPairModal] = useState(false);
   const [manualIpInput, setManualIpInput] = useState('');
+  const [enrollCodeInput, setEnrollCodeInput] = useState('');
+  // A QR scan drops the device token straight into the URL, so capture it before
+  // the first render decides whether this handset still needs to enrol.
+  const [isEnrolled, setIsEnrolled] = useState(() => {
+    captureTokenFromUrl();
+    return hasToken();
+  });
   const [pairError, setPairError] = useState('');
   const [isTestingConn, setIsTestingConn] = useState(false);
 
@@ -42,9 +50,9 @@ export const WaiterApp = () => {
     const cleanUrl = targetUrl.replace(/\/+$/, '');
     try {
       const [tablesRes, ordersRes, menuRes] = await Promise.all([
-        fetch(`${cleanUrl}/tables`).catch(() => null),
-        fetch(`${cleanUrl}/orders/active`).catch(() => null),
-        fetch(`${cleanUrl}/menu`).catch(() => null)
+        authFetch(`${cleanUrl}/tables`).catch(() => null),
+        authFetch(`${cleanUrl}/orders/active`).catch(() => null),
+        authFetch(`${cleanUrl}/menu`).catch(() => null)
       ]);
 
       if (menuRes && menuRes.ok) {
@@ -88,7 +96,7 @@ export const WaiterApp = () => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 4000); // 4s timeout
 
-      const res = await fetch(`${cleanUrl}/pairing-info`, { signal: controller.signal });
+      const res = await authFetch(`${cleanUrl}/pairing-info`, { signal: controller.signal });
       clearTimeout(timeoutId);
 
       if (res.ok) {
@@ -278,7 +286,7 @@ export const WaiterApp = () => {
     if (!hubUrl) return;
     const cleanUrl = hubUrl.replace(/\/+$/, '');
     try {
-      const res = await fetch(`${cleanUrl}/tables/${tableId}/clear`, {
+      const res = await authFetch(`${cleanUrl}/tables/${tableId}/clear`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });
@@ -295,6 +303,7 @@ export const WaiterApp = () => {
     e.preventDefault();
     if (!manualIpInput.trim()) return;
     setConnStatus('connecting');
+    setPairError('');
 
     let raw = manualIpInput.trim();
     if (!raw.startsWith('http://') && !raw.startsWith('https://')) {
@@ -304,10 +313,34 @@ export const WaiterApp = () => {
       raw = `${raw}:4000`;
     }
 
+    // The hub only accepts enrolled devices. If this handset has no token yet,
+    // trade the code shown on the Kitchen Display for one before connecting.
+    if (!hasToken()) {
+      const code = enrollCodeInput.trim();
+      if (!code) {
+        setConnStatus('disconnected');
+        setPairError('Enter the enrollment code shown on the Kitchen Display, or scan its QR code instead.');
+        return;
+      }
+
+      const enrolled = await enrollWithCode(raw, code).catch(() => ({
+        ok: false,
+        error: `Could not reach Kitchen Hub at ${raw}. Check WiFi connection.`
+      }));
+
+      if (!enrolled.ok) {
+        setConnStatus('disconnected');
+        setPairError(enrolled.error);
+        return;
+      }
+      setIsEnrolled(true);
+    }
+
     const success = await checkHubConnection(raw);
     if (success) {
       setShowPairModal(false);
       setManualIpInput('');
+      setEnrollCodeInput('');
       fetchLiveState(raw);
     } else {
       setConnStatus('disconnected');
@@ -458,6 +491,28 @@ export const WaiterApp = () => {
                     style={{ fontFamily: 'var(--font-mono)' }}
                   />
                 </div>
+
+                {!isEnrolled && (
+                  <div>
+                    <label className="form-label">
+                      Enrollment code
+                    </label>
+                    <input
+                      type="text"
+                      value={enrollCodeInput}
+                      onChange={e => setEnrollCodeInput(e.target.value.toUpperCase())}
+                      placeholder="Shown on the Kitchen Display"
+                      autoCapitalize="characters"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      className="input"
+                      style={{ fontFamily: 'var(--font-mono)', letterSpacing: '2px' }}
+                    />
+                    <div className="typography-body-sm" style={{ color: 'var(--color-muted)', marginTop: '4px', fontSize: '11px' }}>
+                      Only needed once per handset. Scanning the QR code skips this step.
+                    </div>
+                  </div>
+                )}
 
                 {pairError && (
                   <div style={{ color: 'var(--color-error-text)', fontSize: '11px', fontWeight: 600 }}>

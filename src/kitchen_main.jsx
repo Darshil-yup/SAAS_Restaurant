@@ -7,6 +7,7 @@ import './index.css';
 const KitchenHubApp = () => {
   const [pairingInfo, setPairingInfo] = useState(null);
   const [qrCodeUrl, setQrCodeUrl] = useState(null);
+  const [enrollmentCode, setEnrollmentCode] = useState(null);
   const [tickets, setTickets] = useState([]);
   const [syncStatus, setSyncStatus] = useState({ queued: 0, online: true, isSyncing: false });
   const [wsConnStatus, setWsConnStatus] = useState('connecting'); // 'connecting' | 'connected' | 'disconnected'
@@ -42,6 +43,7 @@ const KitchenHubApp = () => {
       if (res.ok) {
         const data = await res.json();
         setQrCodeUrl(data.qr_code);
+        setEnrollmentCode(data.enrollment_code || null);
       }
     } catch (err) {
       console.warn('Could not fetch QR code:', err);
@@ -309,6 +311,14 @@ const KitchenHubApp = () => {
             </div>
             <div style={{ marginTop: '12px', background: 'var(--color-surface-soft)', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', color: 'var(--color-body)' }}>
               Pairing Code: <strong style={{ color: 'var(--color-primary)', fontFamily: 'var(--font-mono)' }}>{pairingInfo?.pairing_code || '---'}</strong>
+            </div>
+            {/* Handsets that cannot scan the QR type this code once to enrol.
+                It is only ever served to this screen, never over the LAN. */}
+            <div style={{ marginTop: '8px', background: 'var(--color-surface-soft)', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', color: 'var(--color-body)' }}>
+              Enrollment Code: <strong style={{ color: 'var(--color-primary)', fontFamily: 'var(--font-mono)', letterSpacing: '2px' }}>{enrollmentCode || '---'}</strong>
+              <div style={{ fontSize: '10px', color: 'var(--color-muted)', marginTop: '2px' }}>
+                Type this on a waiter handset if it cannot scan the QR code.
+              </div>
             </div>
           </div>
 

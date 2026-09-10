@@ -5,7 +5,7 @@ import { supabase, authenticateHubStaff } from './supabaseClient.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.join(__dirname, '..', 'data');
+const DATA_DIR = process.env.HUB_DATA_DIR || path.join(__dirname, '..', 'data');
 const CONFIG_FILE = path.join(DATA_DIR, 'hub_config.json');
 
 // Ensure data directory exists
@@ -54,7 +54,6 @@ class HubConfig {
       pairing_code: 'MJW-7492',
       slug: 'hotel-mejwani',
       city: 'Nagpur',
-      kitchen_pin: '9842',
       paired_at: new Date().toISOString()
     };
     this.saveConfig(defaultConfig);
@@ -74,14 +73,6 @@ class HubConfig {
 
   getPairingInfo() {
     return { ...this.config };
-  }
-
-  getKitchenPin() {
-    if (!this.config.kitchen_pin) {
-      this.config.kitchen_pin = '9842';
-      this.saveConfig(this.config);
-    }
-    return this.config.kitchen_pin;
   }
 
   async pairWithCode(code) {

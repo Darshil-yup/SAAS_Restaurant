@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { usePos } from '../context/PosContext';
 import { Send, Trash2, Edit3, Wifi } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { authFetch } from '../services/hubAuth';
 
 export const OrderDraftDrawer = ({ selectedTableId, draftItems, onRemoveItem, onClearDraft, hubUrl, hubConnected }) => {
   const { menu, tables, currentRestaurant } = usePos();
@@ -41,7 +42,7 @@ export const OrderDraftDrawer = ({ selectedTableId, draftItems, onRemoveItem, on
     };
 
     try {
-      const res = await fetch(`${targetHub}/orders`, {
+      const res = await authFetch(`${targetHub}/orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(orderPayload)

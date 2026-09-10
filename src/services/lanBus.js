@@ -2,6 +2,8 @@
 // Supports Node.js Hub Server WebSocket (ws://<hub-ip>:4000/live) + BroadcastChannel API fallback.
 // Multi-Tenant Isolation: Events are scoped by restaurantId & pairingCode.
 
+import { authWsUrl } from './hubAuth';
+
 class LanBus {
   constructor() {
     this.listeners = [];
@@ -45,7 +47,9 @@ class LanBus {
     }
 
     try {
-      this.ws = new WebSocket(this.hubUrl);
+      // The live feed is authorised too; WebSocket cannot send headers, so the
+      // device token rides in the query string.
+      this.ws = new WebSocket(authWsUrl(this.hubUrl));
 
       this.ws.onopen = () => {
         this.hubConnected = true;

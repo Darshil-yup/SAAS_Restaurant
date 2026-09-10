@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.join(__dirname, '..', 'data');
+const DATA_DIR = process.env.HUB_DATA_DIR || path.join(__dirname, '..', 'data');
 const TICKETS_FILE = path.join(DATA_DIR, 'tickets.json');
 
 if (!fs.existsSync(DATA_DIR)) {
@@ -87,10 +87,20 @@ class TicketStore {
     return maxNum + 1;
   }
 
-  addTicket(orderData, restaurantId) {
+  /**
+   * `priced` must come from priceOrder() in lib/pricing.js -- it carries the
+   * hub's own item names, prices and total. Client-supplied prices are never
+   * trusted, so this method deliberately does not compute a total from
+   * orderData.items.
+   */
+  addTicket(orderData, restaurantId, priced) {
+    if (!priced || !Array.isArray(priced.items)) {
+      throw new Error('addTicket requires server-priced items from priceOrder()');
+    }
+
     const nextNum = this.getNextTicketNumber(restaurantId);
-    const items = orderData.items || [];
-    const totalAmount = items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.qty) || 1), 0);
+    const items = priced.items;
+    const totalAmount = priced.total_amount;
 
     const ticketId = 't_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
 
