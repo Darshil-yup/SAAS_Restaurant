@@ -488,6 +488,16 @@ app.get('/sync-status', requireDevice, (req, res) => {
   });
 });
 
+// POST /sync/requeue-quarantine — return shelved orders to the sync queue after
+// fixing a hub-wide problem. Restricted to the hub's own screen.
+app.post('/sync/requeue-quarantine', async (req, res) => {
+  if (!isLoopback(req)) {
+    return res.status(403).json({ error: 'Only available on the Kitchen Display.' });
+  }
+  const result = await syncQueue.requeueQuarantined();
+  res.json({ success: true, ...result, sync: syncQueue.getStatus() });
+});
+
 // 9. POST /toggle-outage — Outage simulator. Demo tooling only: it forces the hub
 // offline, so it is restricted to the hub's own screen and can be disabled outright.
 app.post('/toggle-outage', (req, res) => {
@@ -509,16 +519,17 @@ app.post('/toggle-outage', (req, res) => {
 });
 
 // 8. GET /qr — Returns QR code image for pairing (points to Waiter PWA URL)
-// The QR carries a freshly issued device token so scanning it enrols the handset
-// in one step. It is therefore only served to the KDS on the hub itself -- handing
-// this to the LAN would hand out credentials.
+// The QR carries the enrollment code, not a token. The KDS re-fetches this
+// endpoint on a timer, so minting a credential here issued a fresh 30-day token
+// on every poll -- thousands of live grants and an ever-growing hub_config.json.
+// The code is stable until rotated, and the handset exchanges it for exactly one
+// token via /auth/device. Still KDS-only: the code is a credential.
 app.get('/qr', async (req, res) => {
   if (!isLoopback(req)) {
     return res.status(403).json({ error: 'QR pairing codes are only available on the Kitchen Display.' });
   }
   try {
-    const { device_token } = deviceAuth.issueToken('Scanned handset');
-    const waiterUrl = `${SERVER_URL}/waiter#t=${device_token}`;
+    const waiterUrl = `${SERVER_URL}/waiter#e=${deviceAuth.getEnrollmentCode()}`;
     const qrDataUrl = await QRCode.toDataURL(waiterUrl);
     res.json({
       server_url: SERVER_URL,
@@ -811,6 +822,11 @@ server.listen(PORT, '0.0.0.0', () => {
     authenticateHubStaff(pairingInfo.restaurant_id);
     // Initialize Local Persisted Menu & Tables Disk Cache
     restaurantCache.initCache(pairingInfo.restaurant_id, broadcast);
+
+    // Refresh cache and subscribe to Realtime whenever connection is restored
+    syncQueue.onReconnected(() => {
+      restaurantCache.handleReconnection(pairingInfo.restaurant_id, broadcast);
+    });
   }
 
   // Start background sync retry loop

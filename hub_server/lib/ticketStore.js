@@ -115,6 +115,7 @@ class TicketStore {
       status: 'in_progress',
       note: orderData.note || '',
       created_by_waiter: orderData.created_by_waiter || orderData.createdByWaiter || 'Waiter Handset',
+      order_request_id: orderData.order_request_id || null,
       synced_to_cloud: false,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()

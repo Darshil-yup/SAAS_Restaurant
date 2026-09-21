@@ -2,10 +2,11 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { FloorGrid } from './FloorGrid';
 import { RapidOrderBuilder } from './RapidOrderBuilder';
 import { OrderDraftDrawer } from './OrderDraftDrawer';
-import { WifiOff, LayoutGrid, Utensils, ShoppingBag, ShieldCheck, Server, RefreshCw } from 'lucide-react';
+import { WifiOff, LayoutGrid, Utensils, ShoppingBag, ShieldCheck, Server, RefreshCw, Key, QrCode, Download } from 'lucide-react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { usePos } from '../context/PosContext';
-import { authFetch, captureTokenFromUrl, enrollWithCode, hasToken } from '../services/hubAuth';
+import { authFetch, authWsUrl, captureTokenFromUrl, consumePendingEnrollmentCode, enrollWithCode, hasToken } from '../services/hubAuth';
+import { QrScannerModal } from './QrScannerModal';
 
 export const WaiterApp = () => {
   const { currentRestaurant, isMenuUninitialized: posMenuUninitialized } = usePos() || {};
@@ -21,15 +22,30 @@ export const WaiterApp = () => {
     : 'http://localhost:4000';
 
   const [hubUrl, setHubUrl] = useState(() => {
-    return localStorage.getItem('mejwani_hub_url') || defaultHub;
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('mejwani_hub_url');
+      if (saved) {
+        // If saved URL is pointing to localhost but current page was opened on mobile via IP address, adapt to LAN IP
+        if (saved.includes('localhost') && window.location.hostname && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+          return `${window.location.protocol}//${window.location.hostname}:4000`;
+        }
+        return saved;
+      }
+      return defaultHub;
+    }
+    return 'http://localhost:4000';
   });
 
   const [hubInfo, setHubInfo] = useState(null);
-  const [connStatus, setConnStatus] = useState('connecting'); // 'connecting' | 'connected' | 'disconnected'
+  const [connStatus, setConnStatus] = useState('connecting'); // 'connecting' | 'connected' | 'unauthorized' | 'disconnected'
   const hubConnected = connStatus === 'connected';
   const [showPairModal, setShowPairModal] = useState(false);
+  const [showScannerModal, setShowScannerModal] = useState(false);
   const [manualIpInput, setManualIpInput] = useState('');
   const [enrollCodeInput, setEnrollCodeInput] = useState('');
+  const [installPrompt, setInstallPrompt] = useState(null);
+  const [isInstalled, setIsInstalled] = useState(false);
+
   // A QR scan drops the device token straight into the URL, so capture it before
   // the first render decides whether this handset still needs to enrol.
   const [isEnrolled, setIsEnrolled] = useState(() => {
@@ -54,6 +70,13 @@ export const WaiterApp = () => {
         authFetch(`${cleanUrl}/orders/active`).catch(() => null),
         authFetch(`${cleanUrl}/menu`).catch(() => null)
       ]);
+
+      if (tablesRes?.status === 401 || ordersRes?.status === 401 || menuRes?.status === 401) {
+        console.warn('Hub rejected request with 401 Unauthorized: handset requires enrollment');
+        setIsEnrolled(false);
+        setConnStatus('unauthorized');
+        return;
+      }
 
       if (menuRes && menuRes.ok) {
         const menuData = await menuRes.json();
@@ -104,6 +127,16 @@ export const WaiterApp = () => {
         setHubInfo(data);
         pingFailuresRef.current = 0; // Reset fail counter on success
         
+        // If data.authorised is false (hub requires enrollment from this handset)
+        if (data.authorised === false && !hasToken()) {
+          setIsEnrolled(false);
+          setConnStatus('unauthorized');
+          wasConnectedRef.current = false;
+          setIsTestingConn(false);
+          return false;
+        }
+
+        setIsEnrolled(true);
         // Auto Re-Sync check: if previously disconnected and now connected again
         if (!wasConnectedRef.current) {
           fetchLiveState(cleanUrl);
@@ -126,6 +159,27 @@ export const WaiterApp = () => {
     setIsTestingConn(false);
     return false;
   }, [hubUrl, fetchLiveState]);
+
+  // A scanned QR now hands over an enrollment code rather than a token, so trade
+  // it for one as soon as the app mounts. The page is served by the hub itself,
+  // so its own origin is the right address to enrol against.
+  useEffect(() => {
+    const pendingCode = consumePendingEnrollmentCode();
+    if (!pendingCode || hasToken()) return;
+
+    let cancelled = false;
+    (async () => {
+      const target = hubUrl || window.location.origin;
+      const res = await enrollWithCode(target, pendingCode).catch(() => ({ ok: false }));
+      if (!cancelled && res.ok) {
+        setIsEnrolled(true);
+        checkHubConnection(target);
+      }
+    })();
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     isGracePeriodRef.current = true;
@@ -236,10 +290,11 @@ export const WaiterApp = () => {
 
     const connectWs = () => {
       try {
-        ws = new WebSocket(wsUrl);
+        const finalWsUrl = authWsUrl(wsUrl);
+        ws = new WebSocket(finalWsUrl);
 
         ws.onopen = () => {
-          console.log(`📱 Waiter App WS /live connected to ${wsUrl}`);
+          console.log(`📱 Waiter App WS /live connected to ${finalWsUrl}`);
           fetchLiveState(cleanUrl);
         };
 
@@ -277,11 +332,22 @@ export const WaiterApp = () => {
 
   // Handle Clearing Table Bill
   const handleClearTableBill = async (tableId) => {
+    // 1. Clear draft for table
     setDrafts(p => {
       const c = { ...p };
       delete c[tableId];
       return c;
     });
+
+    // 2. Optimistic UI update immediately
+    const prevTables = [...liveTables];
+    setLiveTables(prev => prev.map(t => String(t.id) === String(tableId) ? {
+      ...t,
+      status: 'available',
+      activeOrderTotal: 0,
+      occupiedSince: null
+    } : t));
+    setActiveOrders(prev => prev.filter(o => String(o.table_id) !== String(tableId)));
 
     if (!hubUrl) return;
     const cleanUrl = hubUrl.replace(/\/+$/, '');
@@ -292,20 +358,35 @@ export const WaiterApp = () => {
       });
       if (res.ok) {
         console.log(`🧹 Clear bill request for table ${tableId} succeeded on Hub`);
+        const data = await res.json().catch(() => ({}));
+        if (data.tables && Array.isArray(data.tables)) {
+          setLiveTables(data.tables);
+        }
         fetchLiveState(cleanUrl);
+      } else {
+        // Revert optimistic update
+        setLiveTables(prevTables);
+        const errData = await res.json().catch(() => ({}));
+        if (res.status === 401) {
+          setShowPairModal(true);
+          setPairError('Handset is not enrolled or token expired. Enter the enrollment code from Kitchen Display.');
+        } else {
+          alert(errData.error || `Could not clear bill for table ${tableId}`);
+        }
       }
     } catch (err) {
+      setLiveTables(prevTables);
       console.error(`Failed to clear bill for table ${tableId}:`, err);
+      alert(`Could not reach Hub at ${cleanUrl}. Check WiFi connection.`);
     }
   };
 
   const handlePairSubmit = async (e) => {
     e.preventDefault();
-    if (!manualIpInput.trim()) return;
     setConnStatus('connecting');
     setPairError('');
 
-    let raw = manualIpInput.trim();
+    let raw = manualIpInput.trim() || hubUrl.replace(/^https?:\/\//, '');
     if (!raw.startsWith('http://') && !raw.startsWith('https://')) {
       raw = `http://${raw}`;
     }
@@ -315,11 +396,11 @@ export const WaiterApp = () => {
 
     // The hub only accepts enrolled devices. If this handset has no token yet,
     // trade the code shown on the Kitchen Display for one before connecting.
-    if (!hasToken()) {
-      const code = enrollCodeInput.trim();
+    if (!hasToken() || !isEnrolled) {
+      const code = enrollCodeInput.trim().toUpperCase();
       if (!code) {
-        setConnStatus('disconnected');
-        setPairError('Enter the enrollment code shown on the Kitchen Display, or scan its QR code instead.');
+        setConnStatus('unauthorized');
+        setPairError('Enter the 6-character enrollment code shown on the Kitchen Display (e.g. 9KZXEC).');
         return;
       }
 
@@ -329,8 +410,8 @@ export const WaiterApp = () => {
       }));
 
       if (!enrolled.ok) {
-        setConnStatus('disconnected');
-        setPairError(enrolled.error);
+        setConnStatus('unauthorized');
+        setPairError(enrolled.error || 'Invalid enrollment code. Check the Kitchen Display.');
         return;
       }
       setIsEnrolled(true);
@@ -343,8 +424,70 @@ export const WaiterApp = () => {
       setEnrollCodeInput('');
       fetchLiveState(raw);
     } else {
-      setConnStatus('disconnected');
-      setPairError(`Could not reach Kitchen Hub at ${raw}. Check WiFi connection.`);
+      setConnStatus(prev => (prev === 'unauthorized' ? 'unauthorized' : 'disconnected'));
+      if (!pairError) {
+        setPairError(`Could not reach Kitchen Hub at ${raw}. Check WiFi connection.`);
+      }
+    }
+  };
+
+  // Auto-prompt enrollment modal when handset is detected as unauthorized
+  useEffect(() => {
+    if (connStatus === 'unauthorized' && !hasToken()) {
+      if (!manualIpInput) {
+        setManualIpInput(hubUrl.replace(/^https?:\/\//, ''));
+      }
+      setShowPairModal(true);
+    }
+  }, [connStatus, hubUrl]);
+
+  // Handle successful QR scan from QrScannerModal
+  const handleScanSuccess = useCallback(({ token, hubUrl: detectedHubUrl }) => {
+    if (detectedHubUrl) {
+      const cleanUrl = detectedHubUrl.replace(/\/+$/, '');
+      setHubUrl(cleanUrl);
+      localStorage.setItem('mejwani_hub_url', cleanUrl);
+    }
+    setIsEnrolled(true);
+    setConnStatus('connected');
+    setShowPairModal(false);
+    setShowScannerModal(false);
+    fetchLiveState(detectedHubUrl || hubUrl);
+  }, [fetchLiveState, hubUrl]);
+
+  // PWA Install Prompt Listener
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+    };
+
+    const handleAppInstalled = () => {
+      setIsInstalled(true);
+      setInstallPrompt(null);
+      console.log('🎉 Waiter PWA installed to home screen');
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone) {
+      setIsInstalled(true);
+    }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setInstallPrompt(null);
+      setIsInstalled(true);
     }
   };
 
@@ -379,25 +522,27 @@ export const WaiterApp = () => {
 
   return (
     <div style={{
-      width: '100%', minHeight: '100vh', display: 'flex', flexDirection: 'column',
-      background: 'var(--color-canvas)',
-      paddingTop: 'env(safe-area-inset-top, 0px)',
-      paddingBottom: 'env(safe-area-inset-bottom, 0px)',
-      paddingLeft: 'env(safe-area-inset-left, 0px)',
-      paddingRight: 'env(safe-area-inset-right, 0px)'
+      width: '100vw', height: '100dvh', display: 'flex', flexDirection: 'column',
+      background: 'var(--color-canvas)', overflow: 'hidden', userSelect: 'none'
     }}>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        {/* App Header & Pairing Status */}
+      {/* Safe Area Viewport Container */}
+      <div style={{
+        display: 'flex', flexDirection: 'column', height: '100%', width: '100%', maxWidth: '480px',
+        margin: '0 auto', background: 'var(--color-surface)', boxShadow: 'var(--shadow-md)', position: 'relative'
+      }}>
+        {/* Top Minimalist Header */}
         <div style={{
+          padding: '10px 14px', background: 'var(--color-surface)',
+          borderBottom: '1px solid var(--color-hairline)',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '10px 16px', background: 'var(--color-canvas)',
-          borderBottom: '1px solid var(--color-hairline)', flex: 'none'
+          flex: 'none'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <div style={{
-              width: '32px', height: '32px', borderRadius: '50%',
-              background: 'var(--color-primary)', color: 'var(--color-on-primary)', fontWeight: 800, fontSize: '12px',
-              display: 'flex', alignItems: 'center', justifyContent: 'center'
+              width: '28px', height: '28px', borderRadius: 'var(--radius-full)',
+              background: 'var(--color-primary)', color: '#ffffff',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontWeight: 800, fontSize: '11px', fontFamily: 'var(--font-mono)'
             }}>
               W1
             </div>
@@ -411,21 +556,96 @@ export const WaiterApp = () => {
             </div>
           </div>
 
-          <button
-            onClick={() => setShowPairModal(true)}
-            className={`conn-pill conn-pill-${connStatus === 'connected' ? 'ok' : connStatus === 'connecting' ? 'connecting' : 'off'}`}
-            style={{ cursor: 'pointer' }}
-          >
-            {connStatus === 'connected' ? (
-              <ShieldCheck size={12} />
-            ) : connStatus === 'connecting' ? (
-              <RefreshCw size={12} className="spin" />
-            ) : (
-              <WifiOff size={12} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {installPrompt && !isInstalled && (
+              <button
+                onClick={handleInstallClick}
+                style={{
+                  background: 'rgba(255, 87, 34, 0.12)', border: '1px solid var(--color-primary)',
+                  borderRadius: 'var(--radius-full)', color: 'var(--color-primary)',
+                  padding: '4px 10px', fontSize: '11px', fontWeight: 700, display: 'flex',
+                  alignItems: 'center', gap: '4px', cursor: 'pointer'
+                }}
+                title="Install Waiter App on this device"
+              >
+                <Download size={12} />
+                <span>Install</span>
+              </button>
             )}
-            {connStatus === 'connected' ? 'LAN Connected' : connStatus === 'connecting' ? 'Connecting…' : 'Not Connected'}
-          </button>
+
+            <button
+              onClick={() => {
+                if (!manualIpInput) {
+                  setManualIpInput(hubUrl.replace(/^https?:\/\//, ''));
+                }
+                setShowPairModal(true);
+              }}
+              className={`conn-pill conn-pill-${
+                connStatus === 'connected'
+                  ? 'ok'
+                  : connStatus === 'unauthorized'
+                  ? 'warning'
+                  : connStatus === 'connecting'
+                  ? 'connecting'
+                  : 'off'
+              }`}
+              style={{ cursor: 'pointer' }}
+            >
+              {connStatus === 'connected' ? (
+                <ShieldCheck size={12} />
+              ) : connStatus === 'unauthorized' ? (
+                <Key size={12} />
+              ) : connStatus === 'connecting' ? (
+                <RefreshCw size={12} className="spin" />
+              ) : (
+                <WifiOff size={12} />
+              )}
+              {connStatus === 'connected'
+                ? 'LAN Connected'
+                : connStatus === 'unauthorized'
+                ? 'Enter Code'
+                : connStatus === 'connecting'
+                ? 'Connecting…'
+                : 'Not Connected'}
+            </button>
+          </div>
         </div>
+
+        {/* Unauthorized / Unenrolled Handset Banner */}
+        {connStatus === 'unauthorized' && (
+          <div className="banner banner-warning" style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            borderBottom: '1px solid var(--color-warning-border)',
+            padding: '10px 14px', background: 'var(--status-amber-bg)', color: 'var(--status-amber-text)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', fontWeight: 600 }}>
+              <span style={{ fontSize: '16px' }}>🔐</span>
+              <span>Handset not enrolled. Scan KDS QR or enter code.</span>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+              <button
+                onClick={() => setShowScannerModal(true)}
+                className="btn btn-primary btn-sm"
+                style={{ padding: '5px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}
+              >
+                <QrCode size={13} />
+                <span>Scan QR</span>
+              </button>
+              <button
+                onClick={() => {
+                  if (!manualIpInput) {
+                    setManualIpInput(hubUrl.replace(/^https?:\/\//, ''));
+                  }
+                  setShowPairModal(true);
+                }}
+                className="btn btn-ghost btn-sm"
+                style={{ padding: '5px 8px', fontSize: '11px', border: '1px solid currentColor' }}
+              >
+                Enter Code
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Unreachable Hub Offline Banner */}
         {connStatus === 'disconnected' && (
@@ -438,7 +658,12 @@ export const WaiterApp = () => {
               <span>Not connected to kitchen hub. Tap to pair.</span>
             </div>
             <button
-              onClick={() => setShowPairModal(true)}
+              onClick={() => {
+                if (!manualIpInput) {
+                  setManualIpInput(hubUrl.replace(/^https?:\/\//, ''));
+                }
+                setShowPairModal(true);
+              }}
               className="btn btn-danger btn-sm banner-connect-btn"
             >
               Connect
@@ -473,9 +698,35 @@ export const WaiterApp = () => {
                 </h3>
               </div>
 
-              <p style={{ fontSize: '12px', color: 'var(--color-muted)', marginTop: 0, marginBottom: '16px' }}>
-                Scan the QR code displayed on the Kitchen Display screen, or enter the hub's LAN IP address below.
+              <p style={{ fontSize: '12px', color: 'var(--color-muted)', marginTop: 0, marginBottom: '14px' }}>
+                Scan the QR code displayed on the Kitchen Display screen, or enter the 6-character enrollment code below.
               </p>
+
+              {/* Instant Camera QR Scanner Trigger */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPairModal(false);
+                  setShowScannerModal(true);
+                }}
+                className="btn btn-primary"
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  gap: '8px', padding: '11px', marginBottom: '12px', fontSize: '13px', fontWeight: 700
+                }}
+              >
+                <QrCode size={17} />
+                <span>Scan Kitchen Display QR Code</span>
+              </button>
+
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: '8px', margin: '4px 0 12px',
+                color: 'var(--color-muted)', fontSize: '10px', fontWeight: 600, letterSpacing: '1px'
+              }}>
+                <div style={{ flex: 1, height: '1px', background: 'var(--color-hairline)' }} />
+                <span>OR ENTER MANUALLY</span>
+                <div style={{ flex: 1, height: '1px', background: 'var(--color-hairline)' }} />
+              </div>
 
               <form onSubmit={handlePairSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <div>
@@ -486,30 +737,41 @@ export const WaiterApp = () => {
                     type="text"
                     value={manualIpInput}
                     onChange={e => setManualIpInput(e.target.value)}
-                    placeholder="e.g. 192.168.1.50:4000"
+                    placeholder={hubUrl.replace(/^https?:\/\//, '') || "e.g. 192.168.1.50:4000"}
                     className="input"
                     style={{ fontFamily: 'var(--font-mono)' }}
                   />
+                  <div className="typography-body-sm" style={{ color: 'var(--color-muted)', marginTop: '2px', fontSize: '10px' }}>
+                    Hub address: {hubUrl.replace(/^https?:\/\//, '')}
+                  </div>
                 </div>
 
                 {!isEnrolled && (
                   <div>
-                    <label className="form-label">
-                      Enrollment code
+                    <label className="form-label" style={{ fontWeight: 700 }}>
+                      Enrollment Code
                     </label>
                     <input
                       type="text"
                       value={enrollCodeInput}
                       onChange={e => setEnrollCodeInput(e.target.value.toUpperCase())}
-                      placeholder="Shown on the Kitchen Display"
+                      placeholder="e.g. 9KZXEC"
                       autoCapitalize="characters"
                       autoCorrect="off"
                       spellCheck={false}
+                      autoFocus
                       className="input"
-                      style={{ fontFamily: 'var(--font-mono)', letterSpacing: '2px' }}
+                      style={{
+                        fontFamily: 'var(--font-mono)',
+                        letterSpacing: '3px',
+                        fontSize: '16px',
+                        fontWeight: 700,
+                        textAlign: 'center',
+                        textTransform: 'uppercase'
+                      }}
                     />
                     <div className="typography-body-sm" style={{ color: 'var(--color-muted)', marginTop: '4px', fontSize: '11px' }}>
-                      Only needed once per handset. Scanning the QR code skips this step.
+                      Check Kitchen Display (KDS) screen for the code (e.g. <strong>9KZXEC</strong>).
                     </div>
                   </div>
                 )}
@@ -535,7 +797,7 @@ export const WaiterApp = () => {
                     className="btn btn-primary"
                     style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
                   >
-                    {isTestingConn ? <RefreshCw size={14} className="spin" /> : 'Connect'}
+                    {isTestingConn ? <RefreshCw size={14} className="spin" /> : 'Connect & Unlock'}
                   </button>
                 </div>
               </form>
@@ -557,8 +819,15 @@ export const WaiterApp = () => {
                 onClearTableBill={handleClearTableBill}
                 isLoading={connStatus === 'connecting' && liveTables.length === 0}
                 drafts={drafts}
-                onOpenPairing={() => setShowPairModal(true)}
+                onOpenPairing={() => {
+                  if (!manualIpInput) {
+                    setManualIpInput(hubUrl.replace(/^https?:\/\//, ''));
+                  }
+                  setShowPairModal(true);
+                }}
                 hubConnected={hubConnected}
+                connStatus={connStatus}
+                isEnrolled={isEnrolled}
               />
               <OrderDraftDrawer
                 selectedTableId={selectedTableId}
@@ -645,6 +914,14 @@ export const WaiterApp = () => {
             </button>
           ))}
         </div>
+
+        {/* In-App Camera QR Code Scanner Modal */}
+        <QrScannerModal
+          isOpen={showScannerModal}
+          onClose={() => setShowScannerModal(false)}
+          onScanSuccess={handleScanSuccess}
+          hubUrl={hubUrl}
+        />
       </div>
     </div>
   );

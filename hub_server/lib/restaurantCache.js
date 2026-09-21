@@ -263,6 +263,30 @@ class RestaurantCache {
     }
   }
 
+  async handleReconnection(restaurantId, broadcastFn) {
+    console.log(`🌐 Hub reconnected online! Fetching latest menu & table snapshot from Supabase...`);
+    try {
+      const freshMenu = await this.fetchMenuFromSupabase(restaurantId);
+      const freshTables = await this.fetchTablesFromSupabase(restaurantId);
+
+      if (freshMenu) {
+        await this.saveMenuToDisk(freshMenu);
+        if (broadcastFn) broadcastFn('menu_updated', freshMenu);
+      }
+
+      if (freshTables) {
+        await this.saveTablesToDisk(freshTables);
+        if (broadcastFn) broadcastFn('tables_updated', freshTables);
+      }
+
+      this.isUninitialized = false;
+      this.subscribeRealtime(restaurantId, broadcastFn);
+      console.log(`✅ Hub cache successfully synchronized with cloud upon reconnection.`);
+    } catch (err) {
+      console.error(`❌ Error during reconnection cache sync:`, err.message);
+    }
+  }
+
   getMenuCache(restaurantId) {
     if (this.isUninitialized || !this.menuCache) {
       return {

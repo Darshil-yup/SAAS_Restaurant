@@ -9,9 +9,10 @@ import { hubConfig } from './hubConfig.js';
  * Before this existed, any of them could place orders, wipe bills and read the
  * day's revenue.
  *
- * Enrollment: the KDS on the reception laptop shows a short enrollment code and a
- * QR that already carries a token. A handset either scans the QR (seamless) or
- * types the code once. It then holds a bearer token until the code is rotated.
+ * Enrollment: the KDS on the reception laptop shows a short enrollment code, and a
+ * QR carrying that same code. A handset either scans the QR (seamless) or types
+ * the code once; either way it exchanges the code for exactly one bearer token
+ * via /auth/device, and holds it until the code is rotated.
  *
  * The enrollment code is deliberately never returned by any API -- it is only
  * displayed on the physical KDS screen. Serving it would defeat the purpose.
@@ -20,6 +21,7 @@ import { hubConfig } from './hubConfig.js';
 const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const ENROLL_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no I/L/O/0/1
 const MAX_ATTEMPTS = 5;
+const MAX_DEVICES = 50;
 const ATTEMPT_WINDOW_MS = 60 * 1000;
 
 function generateEnrollmentCode() {
@@ -100,7 +102,6 @@ class DeviceAuth {
   issueToken(deviceLabel = 'Handset') {
     const token = crypto.randomBytes(32).toString('hex');
     const cfg = hubConfig.getPairingInfo();
-    const devices = cfg.devices || [];
 
     const device = {
       // Only a hash is persisted, so a leaked hub_config.json cannot be replayed.
@@ -110,8 +111,20 @@ class DeviceAuth {
       expires_at: new Date(Date.now() + TOKEN_TTL_MS).toISOString()
     };
 
-    hubConfig.saveConfig({ ...cfg, devices: [...devices, device] });
+    hubConfig.saveConfig({ ...cfg, devices: [...this.prunedDevices(cfg), device] });
     return { device_token: token, expires_at: device.expires_at };
+  }
+
+  /**
+   * Drops expired grants and keeps the roster bounded. A restaurant runs a
+   * handful of handsets; an unbounded list would grow hub_config.json forever
+   * and keep stale 30-day credentials valid.
+   */
+  prunedDevices(cfg) {
+    const now = Date.now();
+    return (cfg.devices || [])
+      .filter(d => new Date(d.expires_at).getTime() > now)
+      .slice(-(MAX_DEVICES - 1));
   }
 
   verifyToken(token) {

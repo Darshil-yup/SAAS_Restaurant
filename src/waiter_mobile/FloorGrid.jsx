@@ -24,7 +24,7 @@ export const FloorGridSkeleton = () => (
   </div>
 );
 
-export const FloorGrid = ({ selectedTable, onSelectTable, tables: propTables, onClearTableBill, isLoading = false, drafts = {}, onOpenPairing, hubConnected }) => {
+export const FloorGrid = ({ selectedTable, onSelectTable, tables: propTables, onClearTableBill, isLoading = false, drafts = {}, onOpenPairing, hubConnected, connStatus, isEnrolled }) => {
   const contextPos = usePos() || {};
   const tables = propTables || contextPos.tables || [];
   const clearTableBill = onClearTableBill || contextPos.clearTableBill;
@@ -37,6 +37,8 @@ export const FloorGrid = ({ selectedTable, onSelectTable, tables: propTables, on
   if (isLoading) {
     return <FloorGridSkeleton />;
   }
+
+  const isUnauthorized = connStatus === 'unauthorized' || isEnrolled === false;
 
   const handleClearClick = async (e, tableId) => {
     e.stopPropagation();
@@ -77,18 +79,26 @@ export const FloorGrid = ({ selectedTable, onSelectTable, tables: propTables, on
           border: '1px dashed var(--color-hairline)', borderRadius: 'var(--radius-md)',
           background: 'var(--color-canvas)'
         }}>
-          <div style={{ fontSize: '32px', marginBottom: '8px' }}>🪑</div>
+          <div style={{ fontSize: '32px', marginBottom: '8px' }}>
+            {isUnauthorized ? '🔐' : '🪑'}
+          </div>
           <div style={{ fontWeight: 700, color: 'var(--color-ink)', marginBottom: '4px', fontFamily: 'var(--font-display)' }}>
-            {hubConnected === false ? 'No tables loaded' : 'No tables in this section'}
+            {isUnauthorized
+              ? 'Handset Not Enrolled'
+              : hubConnected === false
+                ? 'No tables loaded'
+                : 'No tables in this section'}
           </div>
-          <div className="typography-body-sm" style={{ color: 'var(--color-muted)', marginBottom: hubConnected === false ? '12px' : '0' }}>
-            {hubConnected === false
-              ? 'Connect to the kitchen hub to load your floor plan.'
-              : 'Try selecting a different section above.'}
+          <div className="typography-body-sm" style={{ color: 'var(--color-muted)', marginBottom: (isUnauthorized || hubConnected === false) ? '12px' : '0' }}>
+            {isUnauthorized
+              ? 'Enter the 6-character enrollment code shown on the Kitchen Display to view tables and take orders.'
+              : hubConnected === false
+                ? 'Connect to the kitchen hub to load your floor plan.'
+                : 'Try selecting a different section above.'}
           </div>
-          {hubConnected === false && onOpenPairing && (
+          {(isUnauthorized || hubConnected === false) && onOpenPairing && (
             <button onClick={onOpenPairing} className="btn btn-primary btn-sm">
-              Connect to Hub
+              {isUnauthorized ? 'Enter Enrollment Code' : 'Connect to Hub'}
             </button>
           )}
         </div>

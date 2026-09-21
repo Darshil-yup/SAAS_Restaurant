@@ -9,6 +9,34 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = process.env.HUB_DATA_DIR || path.join(__dirname, '..', 'data');
 const QUEUE_FILE = path.join(DATA_DIR, 'sync_queue.json');
+const QUARANTINE_FILE = path.join(DATA_DIR, 'quarantine_sync_queue.json');
+export const MAX_SYNC_ATTEMPTS = 5;
+
+/**
+ * Distinguishes a hub-wide problem from a genuinely bad queue item.
+ *
+ * Quarantine exists to stop one malformed order blocking the queue. But an
+ * unauthorised hub (RLS refusal, expired JWT, missing tenant binding) fails
+ * *every* item identically -- counting those toward the retry limit would
+ * quarantine the whole day's takings for what is really a config error.
+ * Systemic failures pause the drain instead, and retry forever.
+ */
+export function isSystemicFailure(err) {
+  if (!err) return false;
+  const code = String(err.code || '');
+  const message = String(err.message || '').toLowerCase();
+  return (
+    code === '42501' ||            // row-level security violation
+    code === 'PGRST301' ||         // JWT expired / invalid
+    code === '28000' ||            // invalid authorization
+    err.status === 401 ||
+    err.status === 403 ||
+    message.includes('row-level security') ||
+    message.includes('jwt') ||
+    message.includes('not authorized') ||
+    message.includes('permission denied')
+  );
+}
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -21,6 +49,9 @@ class SyncQueue {
     this.isSyncing = false;
     this.lastSyncedAt = null;
     this.onStatusChangeCallbacks = [];
+    this.onReconnectCallbacks = [];
+    // Set by the sync methods when a failure looks hub-wide rather than item-specific.
+    this.lastFailureSystemic = false;
   }
 
   loadQueue() {
@@ -44,6 +75,84 @@ class SyncQueue {
     return true;
   }
 
+  async quarantineItem(item, reason) {
+    let currentQuarantine = [];
+    try {
+      if (fs.existsSync(QUARANTINE_FILE)) {
+        currentQuarantine = JSON.parse(fs.readFileSync(QUARANTINE_FILE, 'utf-8'));
+      }
+    } catch (e) {}
+
+    const quarantinedRecord = {
+      ...item,
+      quarantined_at: new Date().toISOString(),
+      quarantine_reason: reason || 'Max retry attempts exceeded'
+    };
+
+    currentQuarantine.push(quarantinedRecord);
+    try {
+      await fs.promises.writeFile(QUARANTINE_FILE, JSON.stringify(currentQuarantine, null, 2), 'utf-8');
+      console.warn(`[sync] 📦 Item ${item.queue_id} quarantined to quarantine_sync_queue.json.`);
+    } catch (err) {
+      console.error('[sync] ❌ Failed to write quarantine_sync_queue.json:', err);
+    }
+  }
+
+  readQuarantine() {
+    try {
+      if (fs.existsSync(QUARANTINE_FILE)) {
+        return JSON.parse(fs.readFileSync(QUARANTINE_FILE, 'utf-8'));
+      }
+    } catch (err) {
+      console.warn('[sync] Could not read quarantine file:', err.message);
+    }
+    return [];
+  }
+
+  /**
+   * Returns quarantined items to the live queue with their retry budget reset.
+   * Used after fixing a hub-wide problem (provisioning secret, missing migration)
+   * that caused otherwise-valid orders to be shelved.
+   */
+  async requeueQuarantined() {
+    const shelved = this.readQuarantine();
+    if (!shelved.length) return { requeued: 0 };
+
+    const restored = shelved.map(({ quarantined_at, quarantine_reason, ...item }) => ({
+      ...item,
+      attempts: 0
+    }));
+
+    this.saveQueue([...this.queue, ...restored]);
+
+    try {
+      await fs.promises.writeFile(QUARANTINE_FILE, '[]', 'utf-8');
+    } catch (err) {
+      console.error('[sync] ❌ Failed to clear quarantine file:', err);
+    }
+
+    console.log(`[sync] ♻️ Requeued ${restored.length} quarantined item(s) for another attempt.`);
+    this.processQueue();
+    return { requeued: restored.length };
+  }
+
+  onReconnected(callback) {
+    this.onReconnectCallbacks.push(callback);
+    return () => {
+      this.onReconnectCallbacks = this.onReconnectCallbacks.filter(cb => cb !== callback);
+    };
+  }
+
+  notifyReconnected() {
+    this.onReconnectCallbacks.forEach(cb => {
+      try {
+        cb();
+      } catch (err) {
+        console.error('Error in onReconnect callback:', err);
+      }
+    });
+  }
+
   onStatusChange(callback) {
     this.onStatusChangeCallbacks.push(callback);
     return () => {
@@ -65,6 +174,9 @@ class SyncQueue {
   getStatus() {
     return {
       queued: this.queue.length,
+      // Shelved orders are revenue that never reached the cloud. Surfacing the
+      // count keeps that from being a console-only event.
+      quarantined: this.readQuarantine().length,
       online: this.isOnline,
       isSyncing: this.isSyncing,
       last_synced_at: this.lastSyncedAt
@@ -126,6 +238,7 @@ class SyncQueue {
       // Reconnection detection: if previously offline and now online
       if (!prevOnline && online) {
         console.log(`[sync] 🌐 Hub Online: Internet connection verified! Draining sync queue (${queuedCount} items queued)...`);
+        this.notifyReconnected();
       }
 
       if (!queuedCount) {
@@ -158,6 +271,7 @@ class SyncQueue {
 
       for (const item of itemsToProcess) {
         let success = false;
+        this.lastFailureSystemic = false;
 
         if (item.type === 'CREATE_ORDER') {
           success = await this.syncOrderToSupabase(item.ticket).catch((err) => {
@@ -190,9 +304,31 @@ class SyncQueue {
           }
           this.lastSyncedAt = new Date().toISOString();
         } else {
+          const targetId = item.ticket?.ticket_number || item.payload?.ticketId || item.queue_id;
+
+          if (this.lastFailureSystemic) {
+            // Hub-wide problem: do not burn this item's retry budget, and stop
+            // the drain so the rest of the queue is preserved intact.
+            console.error(
+              `[sync] 🔒 Cloud rejected the hub itself (not Ticket #${targetId}). ` +
+              'Queue held intact; check HUB_PROVISIONING_SECRET and that migrations 001/002 are applied.'
+            );
+            break;
+          }
+
           item.attempts = (item.attempts || 0) + 1;
-          console.warn(`[sync] ⚠️ Item ${item.queue_id} (Ticket #${item.ticket?.ticket_number || item.payload?.ticketId}) failed sync. Will retry on next interval.`);
-          break; // Stop loop on failure and retry on next interval
+          if (item.attempts >= MAX_SYNC_ATTEMPTS) {
+            console.error(`[sync] 🚨 Item ${item.queue_id} (Ticket #${targetId}) reached max retries (${MAX_SYNC_ATTEMPTS}). Quarantining to prevent head-of-line blocking.`);
+            await this.quarantineItem(item, 'Max retry attempts exceeded during cloud sync');
+            const idx = remainingQueue.findIndex(q => q.queue_id === item.queue_id);
+            if (idx !== -1) {
+              remainingQueue.splice(idx, 1);
+            }
+            // Do not break; allow subsequent healthy items to proceed
+          } else {
+            console.warn(`[sync] ⚠️ Item ${item.queue_id} (Ticket #${targetId}) failed sync (attempt ${item.attempts}/${MAX_SYNC_ATTEMPTS}). Retrying on next cycle.`);
+            break; // Stop loop on transient failure and retry on next interval
+          }
         }
       }
 
@@ -221,6 +357,24 @@ class SyncQueue {
 
       const isUUID = (str) => typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
       const restId = isUUID(ticket.restaurant_id) ? ticket.restaurant_id : '11111111-1111-1111-1111-111111111111';
+      const reqId = ticket.order_request_id || ticket.id || null;
+
+      // Check idempotency if order_request_id is present
+      if (reqId) {
+        try {
+          const { data: existingOrder } = await supabase
+            .from('orders')
+            .select('id')
+            .eq('restaurant_id', restId)
+            .eq('order_request_id', reqId)
+            .maybeSingle();
+
+          if (existingOrder) {
+            console.log(`[sync] ℹ️ Order Ticket #${ticket.ticket_number} (req: ${reqId}) already exists in Supabase. Marking synced.`);
+            return true;
+          }
+        } catch (e) {}
+      }
 
       const orderRecord = {
         restaurant_id: restId,
@@ -230,6 +384,7 @@ class SyncQueue {
         total_amount: Number(ticket.total_amount) || 0,
         note: ticket.note || '',
         created_by_waiter: ticket.created_by_waiter || 'Waiter',
+        order_request_id: reqId,
         synced_to_cloud: true,
         created_at: ticket.created_at || new Date().toISOString()
       };
@@ -239,13 +394,28 @@ class SyncQueue {
       }
 
       // 1. Insert order record
-      const { data: insertedOrder, error: orderErr } = await supabase
+      let { data: insertedOrder, error: orderErr } = await supabase
         .from('orders')
         .insert(orderRecord)
         .select('id')
         .single();
 
+      // Graceful fallback if migration 002 has not been applied to Supabase yet
+      if (orderErr && (orderErr.message?.includes('order_request_id') || orderErr.code === 'PGRST204')) {
+        console.warn(`[sync] ⚠️ 'order_request_id' column not present in cloud database. Retrying insert without it...`);
+        const fallbackRecord = { ...orderRecord };
+        delete fallbackRecord.order_request_id;
+        const retryRes = await supabase
+          .from('orders')
+          .insert(fallbackRecord)
+          .select('id')
+          .single();
+        insertedOrder = retryRes.data;
+        orderErr = retryRes.error;
+      }
+
       if (orderErr) {
+        this.lastFailureSystemic = isSystemicFailure(orderErr);
         console.error('[sync] ❌ Supabase Order Insert Failed:', {
           message: orderErr.message,
           code: orderErr.code || 'unknown',
@@ -270,6 +440,7 @@ class SyncQueue {
 
         const { error: itemsErr } = await supabase.from('order_items').insert(itemRecords);
         if (itemsErr) {
+          this.lastFailureSystemic = isSystemicFailure(itemsErr);
           console.error('[sync] ❌ Supabase Order Items Insert Failed:', {
             message: itemsErr.message,
             code: itemsErr.code || 'unknown',
@@ -299,6 +470,7 @@ class SyncQueue {
         .eq('ticket_number', Number(ticketId));
 
       if (error) {
+        this.lastFailureSystemic = isSystemicFailure(error);
         console.error('[sync] ❌ Supabase Status Update Failed:', {
           message: error.message,
           code: error.code || 'unknown',

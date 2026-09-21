@@ -167,6 +167,51 @@ test('C2: CORS does not allow arbitrary web origins', async () => {
   assert.notEqual(res.headers.get('access-control-allow-origin'), 'https://evil.example');
 });
 
+test('C2: repeated /qr polling does not mint device tokens', async () => {
+  // The KDS re-fetches /qr on a timer. An earlier version issued a fresh 30-day
+  // token per request, which grew hub_config.json to 1100+ live grants.
+  const cfgPath = path.join(dataDir, 'hub_config.json');
+  const before = JSON.parse(fs.readFileSync(cfgPath, 'utf8')).devices.length;
+
+  for (let i = 0; i < 5; i++) {
+    // /qr is restricted to the hub machine; HUB_TRUST_LOOPBACK=false makes this
+    // suite remote, so assert the restriction holds and read the code directly.
+    const res = await api('/qr');
+    assert.equal(res.status, 403, '/qr must not be served to the LAN');
+  }
+
+  const after = JSON.parse(fs.readFileSync(cfgPath, 'utf8')).devices.length;
+  assert.equal(after, before, 'polling /qr must not issue credentials');
+});
+
+test('C2: the device roster stays bounded and drops expired grants', async () => {
+  const cfgPath = path.join(dataDir, 'hub_config.json');
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+
+  assert.ok(cfg.devices.length <= 50, `roster should stay bounded, saw ${cfg.devices.length}`);
+  const expired = cfg.devices.filter(d => new Date(d.expires_at).getTime() <= Date.now());
+  assert.equal(expired.length, 0, 'expired grants must be pruned');
+});
+
+// ---------------------------------------------------------------------------
+// Sync queue failure classification
+// ---------------------------------------------------------------------------
+
+test('a hub-wide RLS refusal is not treated as a poison item', async () => {
+  const { isSystemicFailure } = await import('../lib/syncQueue.js');
+
+  // Seen live when the hub has an anonymous session but no tenant binding:
+  // every order fails identically, so quarantining them would lose the day.
+  assert.equal(isSystemicFailure({ code: '42501', message: 'new row violates row-level security policy for table "orders"' }), true);
+  assert.equal(isSystemicFailure({ code: 'PGRST301', message: 'JWT expired' }), true);
+  assert.equal(isSystemicFailure({ status: 401, message: 'Unauthorized' }), true);
+
+  // Genuinely item-specific failures still earn quarantine.
+  assert.equal(isSystemicFailure({ code: '23514', message: 'new row for relation "orders" violates check constraint' }), false);
+  assert.equal(isSystemicFailure({ code: '22P02', message: 'invalid input syntax for type uuid' }), false);
+  assert.equal(isSystemicFailure(null), false);
+});
+
 // ---------------------------------------------------------------------------
 // C3 — billing integrity
 // ---------------------------------------------------------------------------

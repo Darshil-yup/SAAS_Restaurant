@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Activity, Server, Wifi, WifiOff, Smartphone, Utensils, Clock,
-  CheckCircle2, AlertTriangle, ShieldCheck, RefreshCw, LayoutGrid, DollarSign
+  CheckCircle2, AlertTriangle, ShieldCheck, RefreshCw, LayoutGrid, DollarSign, Globe
 } from 'lucide-react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { LiveClock } from '../components/LiveClock';
+import { fetchCloudDashboardData, subscribeCloudRealtime, isCloudConfigured } from '../services/cloudDataService';
 
 export const HubDashboardView = () => {
   const defaultHub = typeof window !== 'undefined'
@@ -12,22 +13,45 @@ export const HubDashboardView = () => {
     : 'http://localhost:4000';
 
   const [hubData, setHubData] = useState(null);
+  const [connectionMode, setConnectionMode] = useState('connecting'); // 'lan' | 'cloud' | 'disconnected'
   const [isLoading, setIsLoading] = useState(true);
   const [lastFetchErr, setLastFetchErr] = useState('');
   const shouldReduceMotion = useReducedMotion();
+  const activeModeRef = useRef('connecting');
 
   const fetchDashboardData = useCallback(async () => {
     try {
-      const res = await fetch(`${defaultHub}/dashboard-data`);
+      // 1. Attempt LAN Hub Direct Fetch
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      const res = await fetch(`${defaultHub}/dashboard-data`, { signal: controller.signal });
+      clearTimeout(timeoutId);
+
       if (res.ok) {
         const data = await res.json();
         setHubData(data);
+        setConnectionMode('lan');
+        activeModeRef.current = 'lan';
         setLastFetchErr('');
-      } else {
-        setLastFetchErr('Could not fetch dashboard metrics');
+        setIsLoading(false);
+        return;
       }
-    } catch (err) {
-      setLastFetchErr('Hub server unreachable');
+    } catch (lanErr) {
+      // LAN unreachable — attempt Cloud Remote Mode Fallback
+      if (isCloudConfigured()) {
+        const cloudRes = await fetchCloudDashboardData().catch(() => ({ ok: false }));
+        if (cloudRes.ok && cloudRes.data) {
+          setHubData(cloudRes.data);
+          setConnectionMode('cloud');
+          activeModeRef.current = 'cloud';
+          setLastFetchErr('');
+          setIsLoading(false);
+          return;
+        }
+      }
+      setConnectionMode('disconnected');
+      activeModeRef.current = 'disconnected';
+      setLastFetchErr('Hub server unreachable & Cloud sync offline');
     } finally {
       setIsLoading(false);
     }
@@ -39,13 +63,14 @@ export const HubDashboardView = () => {
     return () => clearInterval(interval);
   }, [fetchDashboardData]);
 
-  // Real-Time WebSocket Subscription
+  // Real-Time WebSocket & Cloud Realtime Subscriptions
   useEffect(() => {
     const wsHost = defaultHub.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
     const wsUrl = `${wsHost}/live`;
 
     let ws = null;
     let isSubscribed = true;
+    let cloudUnsub = null;
 
     const connectWs = () => {
       try {
@@ -67,16 +92,26 @@ export const HubDashboardView = () => {
         };
 
         ws.onclose = () => {
-          if (isSubscribed) setTimeout(connectWs, 4000);
+          if (isSubscribed && activeModeRef.current === 'lan') {
+            setTimeout(connectWs, 4000);
+          }
         };
       } catch (err) {}
     };
 
     connectWs();
 
+    // Also register cloud realtime listener for remote cloud mode updates
+    cloudUnsub = subscribeCloudRealtime('11111111-1111-1111-1111-111111111111', () => {
+      if (activeModeRef.current === 'cloud') {
+        fetchDashboardData();
+      }
+    });
+
     return () => {
       isSubscribed = false;
       if (ws) ws.close();
+      if (cloudUnsub) cloudUnsub();
     };
   }, [defaultHub, fetchDashboardData]);
 
@@ -120,12 +155,21 @@ export const HubDashboardView = () => {
           <div>
             <div className="typography-display-sm" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               {restaurant.name || 'Hotel Mejwani'} Live Operational Dashboard
-              <span className={`conn-pill ${lastFetchErr ? 'conn-pill-off' : 'conn-pill-ok'}`}>
-                {lastFetchErr ? 'HUB OFFLINE' : 'HUB ONLINE'}
+              <span className={`conn-pill ${
+                connectionMode === 'lan' ? 'conn-pill-ok' :
+                connectionMode === 'cloud' ? 'conn-pill-cloud' : 'conn-pill-off'
+              }`}>
+                {connectionMode === 'lan' ? '⚡ LAN HUB ONLINE' :
+                 connectionMode === 'cloud' ? '🌐 CLOUD REMOTE' : '🔴 OFFLINE'}
               </span>
             </div>
             <div className="typography-body-sm" style={{ color: 'var(--color-muted)', marginTop: '2px' }}>
-              Pairing Code: <strong style={{ color: 'var(--color-primary)' }}>{restaurant.pairing_code || 'MJW-7492'}</strong> · LAN IP: <span style={{ fontFamily: 'var(--font-mono)' }}>{defaultHub}</span>
+              Pairing Code: <strong style={{ color: 'var(--color-primary)' }}>{restaurant.pairing_code || 'MJW-7492'}</strong> ·{' '}
+              {connectionMode === 'cloud' ? (
+                <span>Source: <strong style={{ color: 'var(--status-blue-text)' }}>Supabase Cloud DB (Remote)</strong></span>
+              ) : (
+                <span>LAN IP: <span style={{ fontFamily: 'var(--font-mono)' }}>{defaultHub}</span></span>
+              )}
             </div>
           </div>
         </div>
