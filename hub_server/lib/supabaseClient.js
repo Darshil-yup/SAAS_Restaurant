@@ -47,11 +47,16 @@ export const checkSupabaseConnection = async () => {
 };
 
 /**
- * Phase 2 Auth Strategy: Authenticates the hub server as a dedicated 'kitchen' staff member
- * for the paired restaurant ID. Uses anonymous auth + staff_users row mapping.
- * Avoids service_role key to respect Supabase RLS policies.
+ * Authenticates the hub server as the dedicated 'kitchen' staff identity for the
+ * paired restaurant. Uses anonymous auth + a staff_users row mapping, deliberately
+ * avoiding the service_role key so Supabase RLS still applies.
+ *
+ * Binding requires HUB_PROVISIONING_SECRET, the per-restaurant secret set during
+ * onboarding via set_hub_provisioning_secret(). Before that secret existed, any
+ * anonymous caller could bind themselves to any tenant -- see
+ * database/migrations/001_secure_hub_provisioning.sql.
  */
-export const authenticateHubStaff = async (restaurantId, kitchenPin = '9842', force = false) => {
+export const authenticateHubStaff = async (restaurantId, force = false) => {
   if (!restaurantId || SUPABASE_URL.includes('example.supabase.co')) {
     return { success: false, reason: 'Offline or default Supabase URL' };
   }
@@ -94,30 +99,28 @@ export const authenticateHubStaff = async (restaurantId, kitchenPin = '9842', fo
       return { success: true, staff: existingStaff, user_id: userId };
     }
 
-    // 3. Call provision_kitchen_staff RPC to handle pin_hash creation & user_id binding
+    // 3. Bind this session to the tenant's kitchen identity.
+    const provisioningSecret = process.env.HUB_PROVISIONING_SECRET;
+    if (!provisioningSecret) {
+      console.warn(
+        '⚠️ HUB_PROVISIONING_SECRET is not set — this hub cannot bind to its tenant, so cloud sync will stay queued.\n' +
+        '   Set it in .env to the secret registered for this restaurant via set_hub_provisioning_secret().'
+      );
+      return { success: false, error: 'HUB_PROVISIONING_SECRET not configured' };
+    }
+
     const { data: staffId, error: rpcErr } = await supabase.rpc('provision_kitchen_staff', {
       p_restaurant_id: restaurantId,
-      p_pin: kitchenPin,
-      p_user_id: userId
+      p_provisioning_secret: provisioningSecret
     });
 
     if (rpcErr) {
-      console.warn('⚠️ Could not provision kitchen staff role via RPC:', rpcErr.message);
-      // Fallback: Bind user_id to existing kitchen staff record if already present
-      const { data: updatedStaff, error: updateErr } = await supabase
-        .from('staff_users')
-        .update({ user_id: userId })
-        .eq('restaurant_id', restaurantId)
-        .eq('role', 'kitchen')
-        .select()
-        .maybeSingle();
-
-      if (!updateErr && updatedStaff) {
-        console.log(`✅ Linked existing kitchen staff record to Hub session (Staff ID: ${updatedStaff.id}, Auth UID: ${userId})`);
-        isHubAuthenticated = true;
-        return { success: true, staff: updatedStaff, user_id: userId };
-      }
-
+      // The previous direct-table-update fallback here attempted exactly what the
+      // secured RPC now refuses, and RLS blocks it regardless. Fail loudly instead.
+      console.warn(
+        `⚠️ Hub provisioning refused: ${rpcErr.message}\n` +
+        '   Check that HUB_PROVISIONING_SECRET matches this restaurant and that migration 001 has been applied.'
+      );
       return { success: false, error: rpcErr.message };
     }
 

@@ -28,5 +28,9 @@ Thumbs.db
 scratch/
 .claude/
 
-# Local hub server data (keep seed/template, ignore local runtime tickets json)
+# Local hub server data (keep seed/template, ignore local runtime state)
 hub_server/data/tickets_runtime.json
+hub_server/data/crash_log.json
+hub_server/data/menu_cache.json
+hub_server/data/tables_cache.json
+hub_server/data/invoices/

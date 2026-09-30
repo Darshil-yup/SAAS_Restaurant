@@ -11,6 +11,7 @@ import {
 } from '../services/db';
 import { lanBus } from '../services/lanBus';
 import { playKitchenChime, processCloudSync } from '../services/supabaseSync';
+import { authFetch } from '../services/hubAuth';
 
 const PosContext = createContext(null);
 
@@ -176,10 +177,10 @@ export const PosProvider = ({ children }) => {
 
       try {
         const [activeRes, statusRes, menuRes, tablesLayoutRes] = await Promise.all([
-          fetch(`${hubBaseUrl}/orders/active`).catch(() => null),
-          fetch(`${hubBaseUrl}/sync-status`).catch(() => null),
-          fetch(`${hubBaseUrl}/menu`).catch(() => null),
-          fetch(`${hubBaseUrl}/tables/layout`).catch(() => null)
+          authFetch(`${hubBaseUrl}/orders/active`).catch(() => null),
+          authFetch(`${hubBaseUrl}/sync-status`).catch(() => null),
+          authFetch(`${hubBaseUrl}/menu`).catch(() => null),
+          authFetch(`${hubBaseUrl}/tables/layout`).catch(() => null)
         ]);
 
         if (activeRes && activeRes.ok) {
@@ -264,7 +265,7 @@ export const PosProvider = ({ children }) => {
   const toggleCloudOutage = async () => {
     const hostname = typeof window !== 'undefined' ? (window.location.hostname || 'localhost') : 'localhost';
     try {
-      const res = await fetch(`http://${hostname}:4000/toggle-outage`, { method: 'POST' });
+      const res = await authFetch(`http://${hostname}:4000/toggle-outage`, { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         setCloudOnline(data.online);
@@ -318,7 +319,7 @@ export const PosProvider = ({ children }) => {
 
     // 1. Try sending order to Local Hub Server over LAN HTTP endpoint
     try {
-      const res = await fetch(`${hubBaseUrl}/orders`, {
+      const res = await authFetch(`${hubBaseUrl}/orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(orderPayload)
@@ -404,7 +405,7 @@ export const PosProvider = ({ children }) => {
     const hubBaseUrl = `http://${hostname}:4000`;
 
     try {
-      const res = await fetch(`${hubBaseUrl}/orders/${ticketId}/ready`, { method: 'POST' });
+      const res = await authFetch(`${hubBaseUrl}/orders/${ticketId}/ready`, { method: 'POST' });
       if (res.ok) {
         setAllTickets(prev => ({
           ...prev,

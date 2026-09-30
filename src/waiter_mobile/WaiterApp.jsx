@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { FloorGrid } from './FloorGrid';
 import { RapidOrderBuilder } from './RapidOrderBuilder';
 import { OrderDraftDrawer } from './OrderDraftDrawer';
-import { WifiOff, LayoutGrid, Utensils, ShoppingBag, ShieldCheck, Server, RefreshCw, AlertTriangle } from 'lucide-react';
+import { WifiOff, LayoutGrid, Utensils, ShoppingBag, ShieldCheck, Server, RefreshCw, AlertTriangle, LogOut, UserCircle2 } from 'lucide-react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { usePos } from '../context/PosContext';
 import { Badge } from '../components/ui/badge';
@@ -10,6 +10,10 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { ThemeToggle } from '../components/ThemeToggle';
+import { authFetch, captureTokenFromUrl, enrollWithCode, hasToken } from '../services/hubAuth';
+import { WaiterLogin } from './WaiterLogin';
+
+const WAITER_SESSION_KEY = 'kullina_waiter_session';
 
 export const WaiterApp = () => {
   const { currentRestaurant, isMenuUninitialized: posMenuUninitialized } = usePos() || {};
@@ -32,8 +36,31 @@ export const WaiterApp = () => {
   const hubConnected = connStatus === 'connected';
   const [showPairModal, setShowPairModal] = useState(false);
   const [manualIpInput, setManualIpInput] = useState('');
+  const [enrollCodeInput, setEnrollCodeInput] = useState('');
+  // A QR scan drops the device token straight into the URL, so capture it before
+  // the first render decides whether this handset still needs to enrol.
+  const [isEnrolled, setIsEnrolled] = useState(() => {
+    captureTokenFromUrl();
+    return hasToken();
+  });
   const [pairError, setPairError] = useState('');
   const [isTestingConn, setIsTestingConn] = useState(false);
+  // Which waiter is signed in on this handset. Persisted across reloads so
+  // reception doesn't have to re-enter the PIN mid-shift, cleared on Sign out.
+  const [waiterSession, setWaiterSession] = useState(() => {
+    try {
+      const raw = localStorage.getItem(WAITER_SESSION_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  });
+  const handleWaiterLogin = (waiter) => {
+    setWaiterSession(waiter);
+    try { localStorage.setItem(WAITER_SESSION_KEY, JSON.stringify(waiter)); } catch {}
+  };
+  const signOutWaiter = () => {
+    setWaiterSession(null);
+    try { localStorage.removeItem(WAITER_SESSION_KEY); } catch {}
+  };
 
   const [liveTables, setLiveTables] = useState([]);
   const [activeOrders, setActiveOrders] = useState([]);
@@ -44,9 +71,9 @@ export const WaiterApp = () => {
     const cleanUrl = targetUrl.replace(/\/+$/, '');
     try {
       const [tablesRes, ordersRes, menuRes] = await Promise.all([
-        fetch(`${cleanUrl}/tables`).catch(() => null),
-        fetch(`${cleanUrl}/orders/active`).catch(() => null),
-        fetch(`${cleanUrl}/menu`).catch(() => null)
+        authFetch(`${cleanUrl}/tables`).catch(() => null),
+        authFetch(`${cleanUrl}/orders/active`).catch(() => null),
+        authFetch(`${cleanUrl}/menu`).catch(() => null)
       ]);
 
       if (menuRes && menuRes.ok) {
@@ -77,8 +104,8 @@ export const WaiterApp = () => {
     const cleanUrl = targetUrl.replace(/\/+$/, '');
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000);
-      const res = await fetch(`${cleanUrl}/pairing-info`, { signal: controller.signal });
+      const timeoutId = setTimeout(() => controller.abort(), 4000); // 4s timeout
+      const res = await authFetch(`${cleanUrl}/pairing-info`, { signal: controller.signal });
       clearTimeout(timeoutId);
 
       if (res.ok) {
@@ -195,21 +222,66 @@ export const WaiterApp = () => {
     if (!hubUrl) return;
     const cleanUrl = hubUrl.replace(/\/+$/, '');
     try {
-      const res = await fetch(`${cleanUrl}/tables/${tableId}/clear`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
-      if (res.ok) fetchLiveState(cleanUrl);
-    } catch (err) { console.error(`Failed to clear bill for table ${tableId}:`, err); }
+      const res = await authFetch(`${cleanUrl}/tables/${tableId}/clear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (res.ok) {
+        console.log(`🧹 Clear bill request for table ${tableId} succeeded on Hub`);
+        fetchLiveState(cleanUrl);
+      }
+    } catch (err) {
+      console.error(`Failed to clear bill for table ${tableId}:`, err);
+    }
   };
 
   const handlePairSubmit = async (e) => {
     e.preventDefault();
     if (!manualIpInput.trim()) return;
     setConnStatus('connecting');
+    setPairError('');
+
     let raw = manualIpInput.trim();
-    if (!raw.startsWith('http://') && !raw.startsWith('https://')) raw = `http://${raw}`;
-    if (!raw.includes(':', 6)) raw = `${raw}:4000`;
+    if (!raw.startsWith('http://') && !raw.startsWith('https://')) {
+      raw = `http://${raw}`;
+    }
+    if (!raw.includes(':', 6)) {
+      raw = `${raw}:4000`;
+    }
+
+    // The hub only accepts enrolled devices. If this handset has no token yet,
+    // trade the code shown on the Kitchen Display for one before connecting.
+    if (!hasToken()) {
+      const code = enrollCodeInput.trim();
+      if (!code) {
+        setConnStatus('disconnected');
+        setPairError('Enter the enrollment code shown on the Kitchen Display, or scan its QR code instead.');
+        return;
+      }
+
+      const enrolled = await enrollWithCode(raw, code).catch(() => ({
+        ok: false,
+        error: `Could not reach Kitchen Hub at ${raw}. Check WiFi connection.`
+      }));
+
+      if (!enrolled.ok) {
+        setConnStatus('disconnected');
+        setPairError(enrolled.error);
+        return;
+      }
+      setIsEnrolled(true);
+    }
+
     const success = await checkHubConnection(raw);
-    if (success) { setShowPairModal(false); setManualIpInput(''); fetchLiveState(raw); }
-    else { setConnStatus('disconnected'); setPairError(`Could not reach Kitchen Hub at ${raw}. Check WiFi connection.`); }
+    if (success) {
+      setShowPairModal(false);
+      setManualIpInput('');
+      setEnrollCodeInput('');
+      fetchLiveState(raw);
+    } else {
+      setConnStatus('disconnected');
+      setPairError(`Could not reach Kitchen Hub at ${raw}. Check WiFi connection.`);
+    }
   };
 
   const currentDraftItems = selectedTableId ? (drafts[selectedTableId] || {}) : {};
@@ -241,6 +313,21 @@ export const WaiterApp = () => {
     { id: 'cart',  icon: ShoppingBag, label: 'Cart', badge: totalCartCount },
   ];
 
+  // Gate the whole app on a signed-in waiter. Runs the moment the hub is
+  // reachable — device enrolment is orthogonal (the reception laptop is
+  // trusted-local and never enrols, but its waiter still needs to identify
+  // themselves). Sits before the header so a stale session can't leak a
+  // table into the wrong shift.
+  if (hubConnected && !waiterSession) {
+    return (
+      <WaiterLogin
+        hubUrl={hubUrl}
+        onLogin={handleWaiterLogin}
+        currentRestaurant={hubInfo || currentRestaurant}
+      />
+    );
+  }
+
   return (
     <div style={{
       width: '100%', maxWidth: '480px', height: '100vh', display: 'flex', flexDirection: 'column',
@@ -255,14 +342,29 @@ export const WaiterApp = () => {
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-extrabold shrink-0"
               style={{ background: 'var(--color-primary)', color: 'var(--color-on-primary)' }}>
-              W1
+              {waiterSession?.name ? waiterSession.name.slice(0, 1).toUpperCase() : 'W'}
             </div>
             <div>
               <div className="typography-caption" style={{ color: 'var(--color-ink)' }}>
-                {hubInfo?.name || currentRestaurant?.name || 'Hotel Mejwani'}
+                {hubInfo?.name || currentRestaurant?.name || 'Kullina POS'}
               </div>
-              <div className="font-mono text-[10px]" style={{ color: 'var(--color-muted)' }}>
-                Hub: {hubUrl.replace('http://', '').replace('https://', '')}
+              <div className="font-mono text-[10px] flex items-center gap-1.5" style={{ color: 'var(--color-muted)' }}>
+                {waiterSession?.name && (
+                  <>
+                    <UserCircle2 size={10} />
+                    <span>{waiterSession.name}</span>
+                    <button
+                      onClick={signOutWaiter}
+                      title="Sign out"
+                      className="inline-flex items-center"
+                      style={{ background: 'transparent', border: 'none', color: 'var(--color-muted)', cursor: 'pointer', padding: 0 }}
+                    >
+                      <LogOut size={10} />
+                    </button>
+                    <span style={{ opacity: 0.4 }}>·</span>
+                  </>
+                )}
+                <span>Hub: {hubUrl.replace('http://', '').replace('https://', '')}</span>
               </div>
             </div>
           </div>
@@ -318,6 +420,26 @@ export const WaiterApp = () => {
                   <Input type="text" value={manualIpInput} onChange={e => setManualIpInput(e.target.value)}
                     placeholder="e.g. 192.168.1.50:4000" className="mt-1 font-mono" />
                 </div>
+                {!isEnrolled && (
+                  <div>
+                    <Label className="text-xs font-semibold" style={{ color: 'var(--color-muted)' }}>Enrollment code</Label>
+                    <Input
+                      type="text"
+                      value={enrollCodeInput}
+                      onChange={e => setEnrollCodeInput(e.target.value.toUpperCase())}
+                      placeholder="Shown on the Kitchen Display"
+                      autoCapitalize="characters"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      className="mt-1 font-mono"
+                      style={{ letterSpacing: '2px' }}
+                    />
+                    <p className="typography-body-sm mt-1 text-[11px]" style={{ color: 'var(--color-muted)' }}>
+                      Only needed once per handset. Scanning the QR code skips this step.
+                    </p>
+                  </div>
+                )}
+
                 {pairError && (
                   <div className="text-xs flex items-center gap-1" style={{ color: 'var(--color-error-text)' }}>
                     <AlertTriangle size={12} /> {pairError}
@@ -350,7 +472,7 @@ export const WaiterApp = () => {
               <OrderDraftDrawer
                 selectedTableId={selectedTableId} draftItems={currentDraftItems}
                 onRemoveItem={removeItem} onClearDraft={clearDraft}
-                hubUrl={hubUrl} hubConnected={hubConnected}
+                hubUrl={hubUrl} hubConnected={hubConnected} waiter={waiterSession}
               />
             </>
           )}
@@ -373,7 +495,7 @@ export const WaiterApp = () => {
             <OrderDraftDrawer
               selectedTableId={selectedTableId} draftItems={currentDraftItems}
               onRemoveItem={removeItem} onClearDraft={clearDraft}
-              hubUrl={hubUrl} hubConnected={hubConnected}
+              hubUrl={hubUrl} hubConnected={hubConnected} waiter={waiterSession}
             />
           )}
         </div>

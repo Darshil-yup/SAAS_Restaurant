@@ -14,6 +14,15 @@ import { ticketStore } from './lib/ticketStore.js';
 import { syncQueue } from './lib/syncQueue.js';
 import { authenticateHubStaff } from './lib/supabaseClient.js';
 import { restaurantCache } from './lib/restaurantCache.js';
+import { priceOrder } from './lib/pricing.js';
+import { buildInvoicePreview } from './lib/invoice.js';
+import { invoiceStore } from './lib/invoiceStore.js';
+import { renderKot, renderReceipt, sendToPrinter } from './lib/printer.js';
+import { waiterStore } from './lib/waiterStore.js';
+import { crashReporter, attachHubProcessHandlers } from './lib/crashReporter.js';
+
+attachHubProcessHandlers();
+import { deviceAuth, requireDevice, extractToken, isLoopback, trustLocalAddress } from './lib/deviceAuth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,8 +31,24 @@ const PORT = process.env.PORT || 4000;
 const app = express();
 const server = http.createServer(app);
 
-app.use(cors());
-app.use(express.json());
+// CORS is restricted to LAN/loopback origins. A wildcard here let any website a
+// staff phone opened silently POST to the POS (e.g. /tables/1/clear).
+const PRIVATE_HOST = /^(localhost|127\.0\.0\.1|\[?::1\]?|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)$/;
+
+app.use(cors({
+  origin(origin, callback) {
+    // Non-browser clients (handset fetch, curl) send no Origin at all.
+    if (!origin) return callback(null, true);
+    try {
+      const { hostname } = new URL(origin);
+      return callback(null, PRIVATE_HOST.test(hostname));
+    } catch {
+      return callback(null, false);
+    }
+  },
+  credentials: true
+}));
+app.use(express.json({ limit: '256kb' }));
 
 // -------------------------------------------------------------
 // LAN IP Detection Helper
@@ -53,6 +78,10 @@ function getLanIp() {
 const LAN_IP = getLanIp();
 const SERVER_URL = `http://${LAN_IP}:${PORT}`;
 
+// The KDS is often opened as http://<LAN-IP>:4000 on the reception laptop itself.
+// Those requests are not loopback but do come from this same machine.
+trustLocalAddress(LAN_IP);
+
 // -------------------------------------------------------------
 // WebSocket Layer (Live Real-Time Push to Kitchen KDS & Waiter Handsets)
 // -------------------------------------------------------------
@@ -60,14 +89,24 @@ const wss = new WebSocketServer({ noServer: true });
 const connectedClients = new Set();
 
 server.on('upgrade', (request, socket, head) => {
-  const { pathname } = new URL(request.url, `http://${request.headers.host}`);
-  if (pathname === '/live' || pathname === '/ws') {
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit('connection', ws, request);
-    });
-  } else {
-    socket.destroy();
+  const url = new URL(request.url, `http://${request.headers.host}`);
+  const { pathname } = url;
+
+  if (pathname !== '/live' && pathname !== '/ws') {
+    return socket.destroy();
   }
+
+  // The live feed carries every ticket and table total, so it needs the same
+  // authorisation as the REST endpoints.
+  const token = url.searchParams.get('token');
+  if (!isLoopback(request) && !deviceAuth.verifyToken(token)) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+    return socket.destroy();
+  }
+
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.emit('connection', ws, request);
+  });
 });
 
 function broadcast(type, payload) {
@@ -90,12 +129,20 @@ wss.on('connection', (ws, req) => {
   connectedClients.add(ws);
   console.log(`📱 Client connected over LAN WebSocket (Total active: ${connectedClients.size})`);
 
-  // Send initial connection handshake with pairing & sync info
+  // Send initial connection handshake with pairing & sync info.
+  // Only safe fields: the raw config carries the enrollment code and the
+  // issued device token hashes.
   const pairing = hubConfig.getPairingInfo();
+  const safePairing = {
+    paired: pairing.paired,
+    restaurant_id: pairing.restaurant_id,
+    name: pairing.name,
+    city: pairing.city
+  };
   ws.send(JSON.stringify({
     type: 'CONNECTED',
     payload: {
-      pairing,
+      pairing: safePairing,
       sync: syncQueue.getStatus(),
       active_tickets_count: ticketStore.getActiveTickets(pairing.restaurant_id).length,
       menu: restaurantCache.getMenuCache(pairing.restaurant_id),
@@ -129,20 +176,44 @@ syncQueue.onStatusChange((status) => {
 // HTTP REST Endpoints
 // -------------------------------------------------------------
 
-// 1. GET /pairing-info
+// 0. POST /auth/device — exchange the KDS-displayed enrollment code for a token
+app.post('/auth/device', (req, res) => {
+  const ip = req.socket.remoteAddress || 'unknown';
+  const result = deviceAuth.enroll(req.body?.enrollment_code, req.body?.device_label || 'Handset', ip);
+
+  if (!result.ok) {
+    console.warn(`🔒 Device enrollment refused for ${ip}: ${result.error}`);
+    return res.status(result.status).json({ error: result.error });
+  }
+
+  console.log(`🔓 Device enrolled from ${ip} (${req.body?.device_label || 'Handset'})`);
+  res.json({ success: true, device_token: result.device_token, expires_at: result.expires_at });
+});
+
+// 1. GET /pairing-info — public health probe used by handsets before enrolling.
+// Deliberately omits enrollment_code, kitchen_pin and issued device tokens:
+// this endpoint is reachable by anything on the LAN.
 app.get('/pairing-info', (req, res) => {
   const info = hubConfig.getPairingInfo();
+  const authorised = isLoopback(req) || deviceAuth.verifyToken(extractToken(req));
+
   res.json({
-    ...info,
+    paired: info.paired,
+    restaurant_id: info.restaurant_id,
+    name: info.name,
+    city: info.city,
     lan_ip: LAN_IP,
     port: PORT,
     server_url: SERVER_URL,
-    ws_url: `ws://${LAN_IP}:${PORT}/live`
+    ws_url: `ws://${LAN_IP}:${PORT}/live`,
+    authorised,
+    // Shown on the KDS screen itself so staff can read the code off the display.
+    ...(isLoopback(req) ? { enrollment_code: deviceAuth.getEnrollmentCode(), pairing_code: info.pairing_code } : {})
   });
 });
 
 // 2. POST /pair
-app.post('/pair', async (req, res) => {
+app.post('/pair', requireDevice, async (req, res) => {
   const { pairing_code } = req.body;
   const result = await hubConfig.pairWithCode(pairing_code);
   if (result.success) {
@@ -157,7 +228,7 @@ app.post('/pair', async (req, res) => {
 const recentRequests = new Map();
 
 // 3. POST /orders — Waiter submits order over local WiFi
-app.post('/orders', (req, res) => {
+app.post('/orders', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   if (!pairing.paired) {
     return res.status(400).json({ error: 'Hub server is not paired to a restaurant yet.' });
@@ -166,6 +237,22 @@ app.post('/orders', (req, res) => {
   const orderData = req.body;
   if (!orderData || !orderData.items || !orderData.items.length) {
     return res.status(400).json({ error: 'Order must contain at least 1 item.' });
+  }
+
+  // Stamp the ticket with the logged-in waiter's name when the handset supplies
+  // a valid waiter_id. Unknown ids are refused so a bad handset can't attribute
+  // its orders to someone else; missing ids fall back to the handset's own
+  // `created_by_waiter` string (backwards-compatible with pre-PR-9 clients).
+  if (orderData.waiter_id) {
+    const waiter = waiterStore.getById(orderData.waiter_id);
+    if (!waiter || waiter.active === false) {
+      return res.status(400).json({
+        error: 'Unknown or inactive waiter for this order.',
+        code: 'UNKNOWN_WAITER'
+      });
+    }
+    orderData.created_by_waiter = waiter.name;
+    orderData.waiter_id = waiter.id;
   }
 
   // Idempotency check: if order_request_id seen within 60s, return original ticket immediately
@@ -181,8 +268,17 @@ app.post('/orders', (req, res) => {
     });
   }
 
+  // Step 0: Re-price the order against the hub's own menu. Prices and names in
+  // the request body are ignored entirely -- a tampered handset must not be able
+  // to set what a guest is billed.
+  const priced = priceOrder(orderData.items, pairing.restaurant_id);
+  if (!priced.ok) {
+    console.warn(`🧾 Order rejected at pricing: ${priced.error}`, priced.details || '');
+    return res.status(400).json({ error: priced.error, code: priced.code, details: priced.details });
+  }
+
   // Step 1: Assign ticket number & update memory store
-  const newTicket = ticketStore.addTicket(orderData, pairing.restaurant_id);
+  const newTicket = ticketStore.addTicket(orderData, pairing.restaurant_id, priced);
 
   // Step 2: Instantly push ticket to all connected Kitchen Display & Waiter WS clients over LAN BEFORE disk write
   const orderCreatedPayload = {
@@ -209,6 +305,12 @@ app.post('/orders', (req, res) => {
   // Step 3: Asynchronously trigger background cloud sync
   syncQueue.enqueueTicket(newTicket);
 
+  // Step 4: Fire-and-forget auto-KOT print if a printer is configured.
+  // Never blocks the order response — a stuck printer must not lose the
+  // order in the kitchen. Success/failure is logged and observable via
+  // POST /orders/:id/print-kot as a manual retry.
+  autoPrintKot(newTicket, pairing).catch(() => {});
+
   // Immediate success response to waiter handset
   res.status(201).json({
     success: true,
@@ -217,8 +319,22 @@ app.post('/orders', (req, res) => {
   });
 });
 
+async function autoPrintKot(ticket, pairing) {
+  const printers = hubConfig.getPrinters('kot');
+  if (printers.length === 0) return; // No KOT printer configured — silent no-op.
+  const job = renderKot(ticket, pairing);
+  for (const p of printers) {
+    const res = await sendToPrinter(job, { host: p.host, port: p.port });
+    if (res.ok) {
+      console.log(`🖨  KOT ${ticket.table_name || 'Table'} · #${ticket.ticket_number} → ${p.id} (${res.sent_bytes ?? 0} bytes)`);
+    } else {
+      console.warn(`🖨  KOT print failed on ${p.id}: ${res.error} [${res.code}]`);
+    }
+  }
+}
+
 // 4. GET /orders/active — Kitchen display restores open tickets on connect/reload
-app.get('/orders/active', (req, res) => {
+app.get('/orders/active', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const activeTickets = ticketStore.getActiveTickets(pairing.restaurant_id);
   res.json({
@@ -229,7 +345,7 @@ app.get('/orders/active', (req, res) => {
 });
 
 // 5. POST /orders/:id/ready — Kitchen marks ticket ready
-app.post('/orders/:id/ready', (req, res) => {
+app.post('/orders/:id/ready', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const ticketId = req.params.id;
 
@@ -261,14 +377,14 @@ app.post('/orders/:id/ready', (req, res) => {
 });
 
 // 5b. GET /menu — Returns cached menu from local file disk cache
-app.get('/menu', (req, res) => {
+app.get('/menu', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const menuData = restaurantCache.getMenuCache(pairing.restaurant_id);
   res.json(menuData);
 });
 
 // 5c. GET /tables/layout — Returns cached static table layout from local disk cache
-app.get('/tables/layout', (req, res) => {
+app.get('/tables/layout', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const layoutData = restaurantCache.getTablesCache(pairing.restaurant_id);
   res.json(layoutData);
@@ -325,7 +441,7 @@ function getLiveTables(restaurantId) {
 }
 
 // 6. GET /tables — Live Floor Grid table state derived from active tickets
-app.get('/tables', (req, res) => {
+app.get('/tables', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const liveTables = getLiveTables(pairing.restaurant_id);
   const layout = restaurantCache.getTablesCache(pairing.restaurant_id);
@@ -338,45 +454,420 @@ app.get('/tables', (req, res) => {
   });
 });
 
-// 7. POST /tables/:id/clear — Clear table bill after guest payment
-app.post('/tables/:id/clear', (req, res) => {
+function buildPreviewForTable(tableId, pairing, adjustments) {
+  const openTickets = ticketStore.getActiveTicketsForTable(tableId, pairing.restaurant_id);
+  if (openTickets.length === 0) {
+    return { status: 404, body: {
+      success: false,
+      error: `No open tickets for table ${tableId}.`,
+      code: 'NO_OPEN_TICKETS'
+    }};
+  }
+
+  const preview = buildInvoicePreview({
+    tickets: openTickets,
+    tableId,
+    tableName: openTickets[0].table_name,
+    restaurantId: pairing.restaurant_id,
+    currency: pairing.currency || '₹',
+    taxConfig: pairing,
+    adjustments
+  });
+
+  if (!preview.ok) {
+    return { status: 400, body: {
+      success: false,
+      error: preview.error,
+      code: 'INVALID_ADJUSTMENTS'
+    }};
+  }
+
+  const { ok: _ok, ...invoice } = preview;
+  return { status: 200, body: { success: true, preview: true, invoice } };
+}
+
+// 7a. GET /tables/:id/invoice — Preview the current bill for a table (any time)
+app.get('/tables/:id/invoice', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const { status, body } = buildPreviewForTable(req.params.id, pairing, undefined);
+  res.status(status).json(body);
+});
+
+// 7a-2. POST /tables/:id/invoice/preview — Preview with reception-supplied adjustments
+app.post('/tables/:id/invoice/preview', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const adjustments = (req.body && typeof req.body === 'object') ? req.body : {};
+  const { status, body } = buildPreviewForTable(req.params.id, pairing, adjustments);
+  res.status(status).json(body);
+});
+
+// 7b. GET /invoices/:id — Retrieve a previously issued invoice
+app.get('/invoices/:id', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const invoice = invoiceStore.getInvoice(req.params.id, pairing.restaurant_id);
+  if (!invoice) {
+    return res.status(404).json({ success: false, error: 'Invoice not found.' });
+  }
+  res.json({ success: true, invoice });
+});
+
+// 7c. GET /invoices — List issued invoices for this tenant
+app.get('/invoices', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  res.json({
+    success: true,
+    restaurant_id: pairing.restaurant_id,
+    invoices: invoiceStore.listInvoices(pairing.restaurant_id)
+  });
+});
+
+// 7d. POST /invoices/:id/void — Reopen the underlying tickets and record why
+app.post('/invoices/:id/void', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+
+  const result = invoiceStore.voidInvoice(req.params.id, pairing.restaurant_id, {
+    reason: body.reason,
+    actor: body.actor
+  });
+
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+
+  const invoice = result.invoice;
+  const reopened = ticketStore.reopenTickets(invoice.ticket_ids || [], pairing.restaurant_id);
+
+  broadcast('INVOICE_VOIDED', { invoice, reopened_ticket_ids: reopened });
+  console.log(`↩︎  Voided ${invoice.invoice_number} · ${invoice.currency || '₹'}${invoice.grand_total} · reason: ${invoice.voided_reason} · reopened ${reopened.length} ticket(s)`);
+
+  res.json({
+    success: true,
+    invoice,
+    reopened_ticket_ids: reopened,
+    tables: getLiveTables(pairing.restaurant_id)
+  });
+});
+
+// 7e. POST /invoices/:id/mark-paid — Record a settled payment against the invoice
+app.post('/invoices/:id/mark-paid', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+
+  const result = invoiceStore.markPaid(req.params.id, pairing.restaurant_id, {
+    method: body.payment_method,
+    actor: body.actor,
+    payment_ref: body.payment_ref
+  });
+
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+
+  broadcast('INVOICE_PAID', { invoice: result.invoice });
+  console.log(`💰 Marked ${result.invoice.invoice_number} paid · ${result.invoice.payment_method} · ${result.invoice.currency || '₹'}${result.invoice.grand_total}`);
+
+  res.json({ success: true, invoice: result.invoice });
+});
+
+// 7c-2. GET /waiters — Active waiters (public shape only; PIN hashes never leave the hub)
+app.get('/waiters', requireDevice, (req, res) => {
+  res.json({ success: true, waiters: waiterStore.listActive() });
+});
+
+// 7c-3. POST /waiters/login — Verify a 4-digit PIN for a specific waiter
+app.post('/waiters/login', requireDevice, (req, res) => {
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+  const result = waiterStore.verify(body.waiter_id, body.pin);
+  if (!result.ok) {
+    return res.status(401).json({ success: false, error: result.error, code: result.code });
+  }
+  res.json({ success: true, waiter: result.waiter });
+});
+
+// 7c-4. POST /waiters — Add a new waiter (reception / admin flow)
+app.post('/waiters', requireDevice, (req, res) => {
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+  const result = waiterStore.addWaiter({ name: body.name, pin: body.pin });
+  if (!result.ok) {
+    return res.status(400).json({ success: false, error: result.error, code: result.code });
+  }
+  res.status(201).json({ success: true, waiter: result.waiter });
+});
+
+// 7c-5. DELETE /waiters/:id — Deactivate (soft delete preserves ticket history)
+app.delete('/waiters/:id', requireDevice, (req, res) => {
+  const result = waiterStore.deactivate(req.params.id);
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+  res.json({ success: true });
+});
+
+// 7d-2. GET /printers — Configured printers (safe to expose to reception UI)
+app.get('/printers', requireDevice, (req, res) => {
+  res.json({ success: true, printers: hubConfig.getPrinters() });
+});
+
+// 7d-3. POST /orders/:id/print-kot — Explicit reprint of a ticket's KOT
+app.post('/orders/:id/print-kot', requireDevice, async (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const id = req.params.id;
+  const ticket = ticketStore.getAllTickets(pairing.restaurant_id).find(t =>
+    t.id === id || String(t.ticket_number) === String(id)
+  );
+  if (!ticket) return res.status(404).json({ success: false, error: 'Ticket not found.', code: 'NOT_FOUND' });
+
+  const job = renderKot(ticket, pairing);
+  const printers = hubConfig.getPrinters('kot');
+  const results = [];
+  if (printers.length === 0) {
+    results.push({ printer_id: 'preview', ok: true, preview: true });
+  } else {
+    for (const p of printers) {
+      const r = await sendToPrinter(job, { host: p.host, port: p.port });
+      results.push({ printer_id: p.id, ...r });
+    }
+  }
+  console.log(`🖨  KOT reprint #${ticket.ticket_number} → ${results.map(r => `${r.printer_id}:${r.ok ? 'ok' : r.code}`).join(', ')}`);
+  res.json({ success: true, ticket_id: ticket.id, results, preview_text: job.preview_text });
+});
+
+// 7d-4. POST /invoices/:id/print-receipt — Customer receipt for the reception printer
+app.post('/invoices/:id/print-receipt', requireDevice, async (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const invoice = invoiceStore.getInvoice(req.params.id, pairing.restaurant_id);
+  if (!invoice) return res.status(404).json({ success: false, error: 'Invoice not found.', code: 'NOT_FOUND' });
+
+  const job = renderReceipt(invoice, pairing);
+  const printers = hubConfig.getPrinters('receipt');
+  const results = [];
+  if (printers.length === 0) {
+    results.push({ printer_id: 'preview', ok: true, preview: true });
+  } else {
+    for (const p of printers) {
+      const r = await sendToPrinter(job, { host: p.host, port: p.port });
+      results.push({ printer_id: p.id, ...r });
+    }
+  }
+  console.log(`🧾 Receipt ${invoice.invoice_number} → ${results.map(r => `${r.printer_id}:${r.ok ? 'ok' : r.code}`).join(', ')}`);
+  res.json({ success: true, invoice_number: invoice.invoice_number, results, preview_text: job.preview_text });
+});
+
+// 7e-2. POST /invoices/:id/refund — Reverse a paid invoice (parent + all paid splits)
+app.post('/invoices/:id/refund', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+
+  const result = invoiceStore.refund(req.params.id, pairing.restaurant_id, {
+    reason: body.reason,
+    actor: body.actor
+  });
+
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+
+  broadcast('INVOICE_REFUNDED', { invoice: result.invoice });
+  console.log(`↩︎ Refunded ${result.invoice.invoice_number} · ${result.invoice.currency || '₹'}${result.invoice.grand_total} · reason: ${result.invoice.refund_reason}`);
+  res.json({ success: true, invoice: result.invoice });
+});
+
+// 7f. POST /invoices/:id/split-by-seats — Divide grand_total into N equal shares
+app.post('/invoices/:id/split-by-seats', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+
+  const result = invoiceStore.splitBySeats(req.params.id, pairing.restaurant_id, {
+    count: body.count,
+    actor: body.actor
+  });
+
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+
+  broadcast('INVOICE_SPLIT', { invoice: result.invoice });
+  console.log(`🪓 Split ${result.invoice.invoice_number} into ${result.invoice.splits.length} seat share(s)`);
+  res.json({ success: true, invoice: result.invoice });
+});
+
+// 7f-3. POST /invoices/:id/split-by-items — Per-split item assignment
+app.post('/invoices/:id/split-by-items', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+
+  const result = invoiceStore.splitByItems(req.params.id, pairing.restaurant_id, {
+    splits: body.splits,
+    actor: body.actor
+  });
+
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+
+  broadcast('INVOICE_SPLIT', { invoice: result.invoice });
+  console.log(`🪓 Split ${result.invoice.invoice_number} by item into ${result.invoice.splits.length} share(s)`);
+  res.json({ success: true, invoice: result.invoice });
+});
+
+// 7f-2. POST /invoices/:id/split-by-amounts — Reception-supplied per-split amounts
+app.post('/invoices/:id/split-by-amounts', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+
+  const result = invoiceStore.splitByAmounts(req.params.id, pairing.restaurant_id, {
+    splits: body.splits,
+    actor: body.actor
+  });
+
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+
+  broadcast('INVOICE_SPLIT', { invoice: result.invoice });
+  console.log(`🪓 Split ${result.invoice.invoice_number} by amount into ${result.invoice.splits.length} share(s)`);
+  res.json({ success: true, invoice: result.invoice });
+});
+
+// 7g. DELETE /invoices/:id/splits — Undo the split (only if nothing is paid yet)
+app.delete('/invoices/:id/splits', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const result = invoiceStore.unsplit(req.params.id, pairing.restaurant_id);
+
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+
+  broadcast('INVOICE_UNSPLIT', { invoice: result.invoice });
+  console.log(`↩︎ Unsplit ${result.invoice.invoice_number}`);
+  res.json({ success: true, invoice: result.invoice });
+});
+
+// 7h. POST /invoices/:id/splits/:index/mark-paid — Settle one seat share
+app.post('/invoices/:id/splits/:index/mark-paid', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+
+  const result = invoiceStore.markSplitPaid(req.params.id, pairing.restaurant_id, {
+    splitIndex: Number(req.params.index),
+    method: body.payment_method,
+    actor: body.actor,
+    payment_ref: body.payment_ref
+  });
+
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+
+  broadcast('INVOICE_SPLIT_PAID', {
+    invoice: result.invoice,
+    split_index: Number(req.params.index),
+    parent_settled: result.parent_settled
+  });
+  if (result.parent_settled) {
+    broadcast('INVOICE_PAID', { invoice: result.invoice });
+  }
+  console.log(`💰 Split ${Number(req.params.index) + 1}/${result.invoice.splits.length} of ${result.invoice.invoice_number} paid · ${body.payment_method}${result.parent_settled ? ' · parent settled' : ''}`);
+
+  res.json({ success: true, invoice: result.invoice, parent_settled: result.parent_settled });
+});
+
+function issueInvoiceForTable(tableId, pairing, adjustments) {
+  const openTickets = ticketStore.getActiveTicketsForTable(tableId, pairing.restaurant_id);
+  if (openTickets.length === 0) return { ok: true, invoice: null };
+  const result = invoiceStore.issueInvoice({
+    tickets: openTickets,
+    tableId,
+    tableName: openTickets[0].table_name,
+    restaurantId: pairing.restaurant_id,
+    currency: pairing.currency || '₹',
+    taxConfig: pairing,
+    adjustments
+  });
+  if (!result.ok) return { ok: false, error: result.error };
+  return { ok: true, invoice: result.invoice };
+}
+
+// 7. POST /tables/:id/clear — Close a bill: issue invoice, then complete tickets
+app.post('/tables/:id/clear', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const tableId = req.params.id;
+  const adjustments = (req.body && typeof req.body === 'object') ? req.body : undefined;
+
+  // Issue the invoice BEFORE clearing so the tickets are still queryable.
+  // invoiceStore.issueInvoice is idempotent per (table, ticket ids), so a
+  // network-retry double-POST cannot produce a second invoice.
+  const issued = issueInvoiceForTable(tableId, pairing, adjustments);
+  if (!issued.ok) {
+    return res.status(400).json({
+      success: false,
+      error: issued.error,
+      code: 'INVALID_ADJUSTMENTS'
+    });
+  }
+  const invoice = issued.invoice;
 
   const { clearedCount, clearedTickets } = ticketStore.clearTableTickets(tableId, pairing.restaurant_id);
 
-  // Queue corresponding Supabase status updates (orders.status = 'completed') cloud-async
   if (clearedTickets && clearedTickets.length > 0) {
     clearedTickets.forEach(t => {
       syncQueue.enqueueStatusUpdate(t.ticket_number || t.id, 'completed', pairing.restaurant_id);
     });
   }
 
-  // Broadcast CLEAR_TABLE and alias events to all WS clients over LAN
   const clearPayload = {
     table_id: Number(tableId) || tableId,
     order_id: tableId,
     cleared_count: clearedCount,
-    status: 'available'
+    status: 'available',
+    invoice_number: invoice?.invoice_number || null,
+    grand_total: invoice?.grand_total ?? null
   };
   broadcast('CLEAR_TABLE', clearPayload);
   broadcast('bill_cleared', clearPayload);
   broadcast('order_cleared', clearPayload);
+  if (invoice) broadcast('INVOICE_ISSUED', { invoice });
 
   const updatedTables = getLiveTables(pairing.restaurant_id);
-  console.log(`🧹 Cleared bill for Table ${tableId} (${clearedCount} ticket(s) completed, queued for cloud sync)`);
+  if (invoice) {
+    console.log(`🧾 Issued ${invoice.invoice_number} for Table ${tableId} · ${pairing.currency || '₹'}${invoice.grand_total} · ${clearedCount} ticket(s) completed`);
+  } else {
+    console.log(`🧹 Cleared bill for Table ${tableId} (${clearedCount} ticket(s) completed, no invoice — no open tickets)`);
+  }
 
   res.json({
     success: true,
     table_id: tableId,
     cleared_count: clearedCount,
-    tables: updatedTables
+    tables: updatedTables,
+    invoice: invoice || null
   });
 });
 
-app.post('/orders/:id/clear', (req, res) => {
+app.post('/orders/:id/clear', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const id = req.params.id;
+  const adjustments = (req.body && typeof req.body === 'object') ? req.body : undefined;
+
+  const issued = issueInvoiceForTable(id, pairing, adjustments);
+  if (!issued.ok) {
+    return res.status(400).json({
+      success: false,
+      error: issued.error,
+      code: 'INVALID_ADJUSTMENTS'
+    });
+  }
+  const invoice = issued.invoice;
 
   const { clearedCount, clearedTickets } = ticketStore.clearTableTickets(id, pairing.restaurant_id);
 
@@ -390,33 +881,75 @@ app.post('/orders/:id/clear', (req, res) => {
     table_id: Number(id) || id,
     order_id: id,
     cleared_count: clearedCount,
-    status: 'available'
+    status: 'available',
+    invoice_number: invoice?.invoice_number || null,
+    grand_total: invoice?.grand_total ?? null
   };
   broadcast('CLEAR_TABLE', orderClearPayload);
   broadcast('bill_cleared', orderClearPayload);
   broadcast('order_cleared', orderClearPayload);
+  if (invoice) broadcast('INVOICE_ISSUED', { invoice });
 
   const updatedTables = getLiveTables(pairing.restaurant_id);
-  console.log(`🧹 Cleared bill for Order/Table ${id} (${clearedCount} ticket(s) completed, queued for cloud sync)`);
+  if (invoice) {
+    console.log(`🧾 Issued ${invoice.invoice_number} for Order/Table ${id} · ${pairing.currency || '₹'}${invoice.grand_total}`);
+  } else {
+    console.log(`🧹 Cleared bill for Order/Table ${id} (${clearedCount} ticket(s) completed)`);
+  }
 
   res.json({
     success: true,
     id,
     cleared_count: clearedCount,
-    tables: updatedTables
+    tables: updatedTables,
+    invoice: invoice || null
   });
 });
 
 // 8. GET /sync-status — Check cloud sync queue & online status
-app.get('/sync-status', (req, res) => {
+app.get('/sync-status', requireDevice, (req, res) => {
   res.json({
     ...syncQueue.getStatus(),
     pairing: hubConfig.getPairingInfo()
   });
 });
 
-// 9. POST /toggle-outage — Outage simulator endpoint for testing
+// 8b. POST /crash-report — Client-side crash sink for the KDS + waiter PWA
+//
+// Intentionally NOT gated behind requireDevice — a crash could happen before
+// the handset finished enrolling, and losing that crash to a 401 is worse
+// than accepting one from a device that doesn't own a token yet. Payloads are
+// heavily size-capped in the reporter itself, and CORS is already restricted
+// to LAN/loopback so this isn't reachable from a public tab.
+app.post('/crash-report', (req, res) => {
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+  const entry = crashReporter.report({
+    source: body.source,
+    message: body.message,
+    stack: body.stack,
+    url: body.url,
+    user_agent: body.user_agent || req.get('user-agent'),
+    extra: body.extra
+  });
+  console.warn(`💥 crash reported · ${entry.source} · ${entry.message}`);
+  res.status(202).json({ success: true, id: entry.id });
+});
+
+// 8c. GET /crash-log — Recent crashes (auth'd, for reception debugging)
+app.get('/crash-log', requireDevice, (req, res) => {
+  const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+  res.json({ success: true, entries: crashReporter.list({ limit }) });
+});
+
+// 9. POST /toggle-outage — Outage simulator. Demo tooling only: it forces the hub
+// offline, so it is restricted to the hub's own screen and can be disabled outright.
 app.post('/toggle-outage', (req, res) => {
+  if (process.env.HUB_DISABLE_OUTAGE_SIM === 'true') {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  if (!isLoopback(req)) {
+    return res.status(403).json({ error: 'Outage simulation is only available on the Kitchen Display.' });
+  }
   syncQueue.isOnline = !syncQueue.isOnline;
   syncQueue.notifyStatusChange();
   if (syncQueue.isOnline) {
@@ -429,11 +962,23 @@ app.post('/toggle-outage', (req, res) => {
 });
 
 // 8. GET /qr — Returns QR code image for pairing (points to Waiter PWA URL)
+// The QR carries a freshly issued device token so scanning it enrols the handset
+// in one step. It is therefore only served to the KDS on the hub itself -- handing
+// this to the LAN would hand out credentials.
 app.get('/qr', async (req, res) => {
+  if (!isLoopback(req)) {
+    return res.status(403).json({ error: 'QR pairing codes are only available on the Kitchen Display.' });
+  }
   try {
-    const waiterUrl = `${SERVER_URL}/waiter`;
+    const { device_token } = deviceAuth.issueToken('Scanned handset');
+    const waiterUrl = `${SERVER_URL}/waiter#t=${device_token}`;
     const qrDataUrl = await QRCode.toDataURL(waiterUrl);
-    res.json({ server_url: SERVER_URL, waiter_url: waiterUrl, qr_code: qrDataUrl });
+    res.json({
+      server_url: SERVER_URL,
+      waiter_url: waiterUrl,
+      qr_code: qrDataUrl,
+      enrollment_code: deviceAuth.getEnrollmentCode()
+    });
   } catch (err) {
     res.status(500).json({ error: 'Failed to generate QR code' });
   }
@@ -446,7 +991,7 @@ if (fs.existsSync(distPath)) {
 }
 
 // 10. GET /dashboard-data — Operational metrics, active & completed tickets, daily totals
-app.get('/dashboard-data', (req, res) => {
+app.get('/dashboard-data', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const liveTables = getLiveTables(pairing.restaurant_id);
   const allTickets = ticketStore.getAllTickets(pairing.restaurant_id);

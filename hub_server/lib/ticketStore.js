@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.join(__dirname, '..', 'data');
+const DATA_DIR = process.env.HUB_DATA_DIR || path.join(__dirname, '..', 'data');
 const TICKETS_FILE = path.join(DATA_DIR, 'tickets.json');
 
 if (!fs.existsSync(DATA_DIR)) {
@@ -87,10 +87,20 @@ class TicketStore {
     return maxNum + 1;
   }
 
-  addTicket(orderData, restaurantId) {
+  /**
+   * `priced` must come from priceOrder() in lib/pricing.js -- it carries the
+   * hub's own item names, prices and total. Client-supplied prices are never
+   * trusted, so this method deliberately does not compute a total from
+   * orderData.items.
+   */
+  addTicket(orderData, restaurantId, priced) {
+    if (!priced || !Array.isArray(priced.items)) {
+      throw new Error('addTicket requires server-priced items from priceOrder()');
+    }
+
     const nextNum = this.getNextTicketNumber(restaurantId);
-    const items = orderData.items || [];
-    const totalAmount = items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.qty) || 1), 0);
+    const items = priced.items;
+    const totalAmount = priced.total_amount;
 
     const ticketId = 't_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
 
@@ -145,14 +155,21 @@ class TicketStore {
     let clearedCount = 0;
     const clearedTickets = [];
     const updatedList = this.tickets.map(t => {
-      const matchTable = String(t.table_id) === String(tableId) || 
-                         String(t.table_name).toLowerCase() === `t${tableId}`.toLowerCase() || 
+      const matchTable = String(t.table_id) === String(tableId) ||
+                         String(t.table_name).toLowerCase() === `t${tableId}`.toLowerCase() ||
                          String(t.table_name).toLowerCase() === `table ${tableId}`.toLowerCase() ||
                          String(t.table_name) === String(tableId) ||
                          String(t.id) === String(tableId);
       if (matchTable && (t.status === 'in_progress' || t.status === 'ready')) {
         clearedCount++;
-        const updated = { ...t, status: 'completed', updated_at: new Date().toISOString() };
+        // Remember what the ticket looked like BEFORE clearing so a later
+        // void on the issued invoice can restore it verbatim.
+        const updated = {
+          ...t,
+          status: 'completed',
+          pre_clear_status: t.status,
+          updated_at: new Date().toISOString()
+        };
         clearedTickets.push(updated);
         return updated;
       }
@@ -165,10 +182,47 @@ class TicketStore {
     return { clearedCount, clearedTickets };
   }
 
+  /**
+   * Reopen a set of previously cleared tickets, restoring their pre-clear
+   * status when known. Used by invoice void: an in-error close should not
+   * strand the guest's KOTs in `completed` land.
+   *
+   * Returns the ids of tickets actually reopened, ignoring any that don't
+   * exist any more, are still open, or belong to another tenant.
+   */
+  reopenTickets(ticketIds, restaurantId) {
+    if (!Array.isArray(ticketIds) || ticketIds.length === 0) return [];
+    const idSet = new Set(ticketIds.map(String));
+    const reopened = [];
+    const updatedList = this.tickets.map(t => {
+      if (!idSet.has(String(t.id))) return t;
+      if (restaurantId && t.restaurant_id !== restaurantId) return t;
+      if (t.status !== 'completed') return t;
+      reopened.push(t.id);
+      const restored = t.pre_clear_status === 'ready' ? 'ready' : 'in_progress';
+      const { pre_clear_status: _prev, ...rest } = t;
+      return { ...rest, status: restored, updated_at: new Date().toISOString() };
+    });
+    if (reopened.length > 0) {
+      this.saveTickets(updatedList);
+    }
+    return reopened;
+  }
+
   getActiveTickets(restaurantId) {
-    return this.tickets.filter(t => 
-      (!restaurantId || t.restaurant_id === restaurantId) && 
+    return this.tickets.filter(t =>
+      (!restaurantId || t.restaurant_id === restaurantId) &&
       (t.status === 'in_progress' || t.status === 'ready')
+    );
+  }
+
+  getActiveTicketsForTable(tableId, restaurantId) {
+    const idStr = String(tableId);
+    return this.getActiveTickets(restaurantId).filter(t =>
+      String(t.table_id) === idStr ||
+      String(t.table_name).toLowerCase() === `t${idStr}`.toLowerCase() ||
+      String(t.table_name).toLowerCase() === `table ${idStr}`.toLowerCase() ||
+      String(t.table_name) === idStr
     );
   }
 

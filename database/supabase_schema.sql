@@ -10,6 +10,8 @@
 
 -- 1. EXTENSIONS & FUNCTIONS
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- Required by the hub provisioning secret (crypt/gen_salt).
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- 2. TENANTS TABLE (restaurants)
 CREATE TABLE IF NOT EXISTS public.restaurants (
@@ -23,6 +25,9 @@ CREATE TABLE IF NOT EXISTS public.restaurants (
     currency VARCHAR(10) DEFAULT '₹',
     plan VARCHAR(20) NOT NULL DEFAULT 'starter', -- 'starter', 'pro', 'enterprise'
     pairing_code VARCHAR(10) NOT NULL,
+    -- bcrypt hash of the secret a reception hub must present to bind itself to
+    -- this tenant. Set with set_hub_provisioning_secret() during onboarding.
+    hub_provisioning_secret_hash TEXT,
     settings JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -45,50 +50,101 @@ CREATE TABLE IF NOT EXISTS public.staff_users (
 
 CREATE INDEX IF NOT EXISTS idx_staff_users_tenant ON public.staff_users(restaurant_id);
 
--- Helper function to get current user's restaurant_id from auth token or staff mapping
+-- Helper function to get current user's restaurant_id from auth token or staff mapping.
+-- search_path is pinned: SECURITY DEFINER functions without it can be subverted by
+-- a caller-controlled search_path shadowing the objects they reference.
 CREATE OR REPLACE FUNCTION public.current_restaurant_id()
-RETURNS UUID AS $$
-    SELECT restaurant_id 
-    FROM public.staff_users 
-    WHERE user_id = auth.uid() 
+RETURNS UUID
+LANGUAGE SQL
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT restaurant_id
+    FROM public.staff_users
+    WHERE user_id = auth.uid()
     LIMIT 1;
-$$ LANGUAGE SQL STABLE SECURITY DEFINER;
+$$;
 
--- Dedicated RPC function to provision kitchen staff role machine identity
+REVOKE ALL ON FUNCTION public.current_restaurant_id() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.current_restaurant_id() TO authenticated;
+
+-- Dedicated RPC used by a reception hub to bind itself to a tenant as the
+-- machine 'kitchen' identity. The provisioning secret is mandatory: without it
+-- this function was a cross-tenant takeover primitive callable by anon.
+-- See database/migrations/001_secure_hub_provisioning.sql for the full rationale.
 CREATE OR REPLACE FUNCTION public.provision_kitchen_staff(
     p_restaurant_id UUID,
-    p_pin TEXT,
-    p_user_id UUID DEFAULT auth.uid()
+    p_provisioning_secret TEXT
 )
-RETURNS UUID AS $$
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
 DECLARE
-    existing_id UUID;
-    target_user_id UUID;
-    new_id UUID;
+    v_uid          UUID := auth.uid();
+    v_secret_hash  TEXT;
+    v_existing_id  UUID;
+    v_new_id       UUID;
 BEGIN
-    target_user_id := COALESCE(p_user_id, auth.uid());
-
-    SELECT id INTO existing_id
-    FROM public.staff_users
-    WHERE restaurant_id = p_restaurant_id AND role = 'kitchen'
-    LIMIT 1;
-
-    IF existing_id IS NOT NULL THEN
-        IF target_user_id IS NOT NULL THEN
-            UPDATE public.staff_users
-            SET user_id = target_user_id
-            WHERE id = existing_id;
-        END IF;
-        RETURN existing_id;
+    IF v_uid IS NULL THEN
+        RAISE EXCEPTION 'Authentication required to provision a hub'
+            USING ERRCODE = '28000';
     END IF;
 
-    INSERT INTO public.staff_users (restaurant_id, user_id, full_name, role, pin_hash)
-    VALUES (p_restaurant_id, target_user_id, 'Kitchen Hub', 'kitchen', crypt(p_pin, gen_salt('bf')))
-    RETURNING id INTO new_id;
+    SELECT hub_provisioning_secret_hash
+      INTO v_secret_hash
+      FROM public.restaurants
+     WHERE id = p_restaurant_id;
 
-    RETURN new_id;
+    -- One error for every failure mode, so this cannot enumerate tenant ids.
+    IF v_secret_hash IS NULL
+       OR p_provisioning_secret IS NULL
+       OR v_secret_hash <> crypt(p_provisioning_secret, v_secret_hash) THEN
+        RAISE EXCEPTION 'Invalid hub provisioning credentials'
+            USING ERRCODE = '28000';
+    END IF;
+
+    SELECT id INTO v_existing_id
+      FROM public.staff_users
+     WHERE restaurant_id = p_restaurant_id AND role = 'kitchen'
+     LIMIT 1;
+
+    IF v_existing_id IS NOT NULL THEN
+        UPDATE public.staff_users
+           SET user_id = v_uid
+         WHERE id = v_existing_id;
+        RETURN v_existing_id;
+    END IF;
+
+    INSERT INTO public.staff_users (restaurant_id, user_id, full_name, role)
+    VALUES (p_restaurant_id, v_uid, 'Kitchen Hub', 'kitchen')
+    RETURNING id INTO v_new_id;
+
+    RETURN v_new_id;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$;
+
+REVOKE ALL ON FUNCTION public.provision_kitchen_staff(UUID, TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.provision_kitchen_staff(UUID, TEXT) TO authenticated;
+
+-- Operator-only helper, not exposed to the API. Run during onboarding.
+CREATE OR REPLACE FUNCTION public.set_hub_provisioning_secret(
+    p_restaurant_id UUID,
+    p_secret TEXT
+)
+RETURNS VOID
+LANGUAGE SQL
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    UPDATE public.restaurants
+       SET hub_provisioning_secret_hash = crypt(p_secret, gen_salt('bf'))
+     WHERE id = p_restaurant_id;
+$$;
+
+REVOKE ALL ON FUNCTION public.set_hub_provisioning_secret(UUID, TEXT) FROM PUBLIC, anon, authenticated;
 
 -- 4. FLOOR TABLES / LAYOUT (tables)
 CREATE TABLE IF NOT EXISTS public.tables (
