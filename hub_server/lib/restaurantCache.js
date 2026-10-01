@@ -17,15 +17,115 @@ if (!fs.existsSync(DATA_DIR)) {
 // Fallback seed data if Supabase tables don't exist or DB is unpopulated on first online boot
 const DEFAULT_CATEGORIES = ['Starters', 'Main Course', 'Breads & Rice', 'Desserts', 'Beverages'];
 const DEFAULT_MENU_ITEMS = [
-  { id: 'm1', name: 'Paneer Butter Masala', price: 280, category: 'Main Course', isVeg: true, available: true },
+  // Items with variants ship a `variants: [{ id, label, price }]` array. When
+  // a variant array is present, the handset MUST pick one — the top-level
+  // `price` acts as a display fallback only and is ignored by lib/pricing.js.
+  //
+  // Items with `modifier_groups: [{ id, label, min, max, options: [{ id,
+  // label, price_delta }] }]` compose on the same shape (M2 · PR 12). Each
+  // group with min>=1 is required; picks over `max` are rejected server-side.
+  // price_delta applies per unit and is added to the variant/base price.
+  // Modifier groups and variants stack: Chicken Tikka Masala (Full) + Extra
+  // Cheese = 340 + 40 = ₹380/unit.
+  {
+    id: 'm1', name: 'Paneer Butter Masala', category: 'Main Course', isVeg: true, available: true,
+    price: 280,
+    variants: [
+      { id: 'v_half', label: 'Half', price: 180 },
+      { id: 'v_full', label: 'Full', price: 280 }
+    ]
+  },
   { id: 'm2', name: 'Dal Tadka', price: 190, category: 'Main Course', isVeg: true, available: true },
-  { id: 'm3', name: 'Chicken Tikka Masala', price: 340, category: 'Main Course', isVeg: false, available: true },
-  { id: 'm4', name: 'Butter Naan', price: 45, category: 'Breads & Rice', isVeg: true, available: true },
-  { id: 'm5', name: 'Jeera Rice', price: 140, category: 'Breads & Rice', isVeg: true, available: true },
+  {
+    id: 'm3', name: 'Chicken Tikka Masala', category: 'Main Course', isVeg: false, available: true,
+    price: 340,
+    variants: [
+      { id: 'v_half', label: 'Half', price: 220 },
+      { id: 'v_full', label: 'Full', price: 340 }
+    ],
+    modifier_groups: [
+      {
+        id: 'mg_spice', label: 'Spice level', min: 1, max: 1,
+        options: [
+          { id: 'mild',   label: 'Mild',   price_delta: 0 },
+          { id: 'medium', label: 'Medium', price_delta: 0 },
+          { id: 'hot',    label: 'Hot',    price_delta: 0 }
+        ]
+      },
+      {
+        id: 'mg_extras', label: 'Extras', min: 0, max: 3,
+        options: [
+          { id: 'extra_cheese', label: 'Extra cheese',  price_delta: 40 },
+          // Extra gravy is 86'd for the demo — sheet renders it disabled
+          // with an "86'd" tag; hub rejects any stale attempt.
+          { id: 'extra_gravy',  label: 'Extra gravy',   price_delta: 30, available: false },
+          { id: 'no_onion',     label: 'No onion',      price_delta: 0 },
+          { id: 'no_cream',     label: 'No cream',      price_delta: 0 }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'm4', name: 'Butter Naan', price: 45, category: 'Breads & Rice', isVeg: true, available: true,
+    // Day-part pricing (M2 · PR 13): breakfast promotion drops naan to ₹35
+    // between 07:00 and 11:00 every day. Legacy items with no `day_parts`
+    // behave exactly as before — the pricer just resolves to the base price.
+    day_parts: [
+      {
+        id: 'dp_breakfast', label: 'Breakfast',
+        starts_at: '07:00', ends_at: '11:00',
+        price: 35
+      }
+    ]
+  },
+  {
+    id: 'm5', name: 'Jeera Rice', category: 'Breads & Rice', isVeg: true, available: true,
+    price: 140,
+    variants: [
+      { id: 'v_half', label: 'Half', price: 90 },
+      { id: 'v_full', label: 'Full', price: 140 }
+    ]
+  },
   { id: 'm6', name: 'Veg Crispy', price: 220, category: 'Starters', isVeg: true, available: true },
-  { id: 'm7', name: 'Chicken 65', price: 290, category: 'Starters', isVeg: false, available: true },
-  { id: 'm8', name: 'Gulab Jamun (2 pcs)', price: 90, category: 'Desserts', isVeg: true, available: true },
-  { id: 'm9', name: 'Masala Chaas', price: 50, category: 'Beverages', isVeg: true, available: true },
+  {
+    id: 'm7', name: 'Chicken 65', category: 'Starters', isVeg: false, available: true,
+    price: 290,
+    variants: [
+      // Boneless is temporarily 86'd (M2 · PR 14 demo). Reception sees the
+      // row disabled with an "86'D" chip; the row can't be tapped and the
+      // hub rejects any stale-menu attempt with VARIANT_UNAVAILABLE.
+      { id: 'v_boneless', label: 'Boneless', price: 320, available: false },
+      { id: 'v_bone_in',  label: 'Bone-in',  price: 290 }
+    ]
+  },
+  // Cold-line item: desserts fire to a separate KOT so the pastry
+  // station doesn't share a printer queue with the hot line (M2 · PR 15).
+  { id: 'm8', name: 'Gulab Jamun (2 pcs)', price: 90, category: 'Desserts', isVeg: true, available: true, station: 'cold' },
+  {
+    // Bar-line item: beverages fire to the bar station's KOT/KDS view.
+    id: 'm9', name: 'Masala Chaas', price: 50, category: 'Beverages', isVeg: true, available: true, station: 'bar',
+    modifier_groups: [
+      {
+        id: 'mg_sweet', label: 'Sweetness', min: 1, max: 1,
+        options: [
+          { id: 'regular',    label: 'Regular',    price_delta: 0 },
+          { id: 'less_sweet', label: 'Less sweet', price_delta: 0 },
+          { id: 'no_sugar',   label: 'No sugar',   price_delta: 0 }
+        ]
+      }
+    ],
+    // Weekday happy hour 4-6 PM: ₹40 instead of ₹50. Sunday/Saturday keep
+    // full price. Modifier deltas still apply on top — the pricer resolves
+    // the effective base first, then folds modifiers.
+    day_parts: [
+      {
+        id: 'dp_happy_hour', label: 'Happy hour',
+        starts_at: '16:00', ends_at: '18:00',
+        days: [1, 2, 3, 4, 5],
+        price: 40
+      }
+    ]
+  },
 ];
 
 const DEFAULT_TABLES = [
@@ -125,14 +225,99 @@ class RestaurantCache {
       } catch (e) {}
 
       let categories = (catData && catData.length) ? catData.map(c => c.name || c) : [];
-      let items = (itemData && itemData.length) ? itemData.map(i => ({
-        id: i.id,
-        name: i.name,
-        price: Number(i.price) || 0,
-        category: i.category || i.category_name || 'General',
-        isVeg: i.is_veg !== undefined ? Boolean(i.is_veg) : Boolean(i.isVeg ?? true),
-        available: i.available !== undefined ? Boolean(i.available) : true
-      })) : [];
+      let items = (itemData && itemData.length) ? itemData.map(i => {
+        // Variants ship as JSONB from Supabase (`variants: [{ id, label, price }]`).
+        // Fall back to the top-level price if nothing valid comes through.
+        const rawVariants = Array.isArray(i.variants) ? i.variants : [];
+        const variants = rawVariants
+          .filter(v => v && v.id && v.label && Number.isFinite(Number(v.price)))
+          .map(v => ({
+            id: String(v.id),
+            label: String(v.label).slice(0, 40),
+            price: Number(v.price),
+            // Per-variant availability (M2 · PR 14). Legacy variants without
+            // the field default to true; only an explicit `false` marks 86'd.
+            available: v.available !== false
+          }));
+        // Modifier groups ship as JSONB (`modifier_groups: [{ id, label, min,
+        // max, options: [{ id, label, price_delta }] }]`). Every level is
+        // defensively normalised so a partial row never crashes the pricer;
+        // an option missing a numeric price_delta is dropped, a group missing
+        // an id or label is dropped, and the group is only kept when it has
+        // at least one valid option.
+        const rawGroups = Array.isArray(i.modifier_groups) ? i.modifier_groups : [];
+        const modifier_groups = rawGroups
+          .map(g => {
+            if (!g || !g.id || !g.label) return null;
+            const options = (Array.isArray(g.options) ? g.options : [])
+              .filter(o => o && o.id && o.label && Number.isFinite(Number(o.price_delta)))
+              .map(o => ({
+                id: String(o.id),
+                label: String(o.label).slice(0, 40),
+                price_delta: Number(o.price_delta),
+                // Per-option availability (M2 · PR 14). Same default-true
+                // discipline as variants — only explicit `false` marks 86'd.
+                available: o.available !== false
+              }));
+            if (options.length === 0) return null;
+            const min = Number.isFinite(Number(g.min)) ? Math.max(0, Math.floor(Number(g.min))) : 0;
+            const max = Number.isFinite(Number(g.max)) ? Math.max(min, Math.floor(Number(g.max))) : options.length;
+            return { id: String(g.id), label: String(g.label).slice(0, 40), min, max, options };
+          })
+          .filter(Boolean);
+        // Day-parts ship as JSONB (`day_parts: [{ id, label, starts_at,
+        // ends_at, days?, price?, variant_prices? }]`). Same defensive
+        // normalisation as modifier_groups — a window missing a valid
+        // HH:MM range is dropped so lib/dayParts.js never has to guard.
+        const HHMM = /^([01]?\d|2[0-3]):([0-5]\d)$/;
+        const rawDayParts = Array.isArray(i.day_parts) ? i.day_parts : [];
+        const day_parts = rawDayParts
+          .map(dp => {
+            if (!dp || !dp.id || !dp.label) return null;
+            if (!HHMM.test(String(dp.starts_at)) || !HHMM.test(String(dp.ends_at))) return null;
+            const out = {
+              id: String(dp.id),
+              label: String(dp.label).slice(0, 40),
+              starts_at: String(dp.starts_at),
+              ends_at: String(dp.ends_at)
+            };
+            if (Array.isArray(dp.days) && dp.days.length > 0) {
+              out.days = dp.days.map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6);
+            }
+            if (Number.isFinite(Number(dp.price)) && Number(dp.price) >= 0) {
+              out.price = Number(dp.price);
+            }
+            if (dp.variant_prices && typeof dp.variant_prices === 'object') {
+              const vp = {};
+              for (const [k, v] of Object.entries(dp.variant_prices)) {
+                if (Number.isFinite(Number(v)) && Number(v) >= 0) vp[String(k)] = Number(v);
+              }
+              if (Object.keys(vp).length > 0) out.variant_prices = vp;
+            }
+            // A window with neither `price` nor `variant_prices` is useless
+            // — drop it rather than let the pricer silently fall back.
+            if (out.price === undefined && !out.variant_prices) return null;
+            return out;
+          })
+          .filter(Boolean);
+        // Station routing (M2 · PR 15): 'hot' | 'cold' | 'bar' | (default
+        // 'hot' when the column is missing / unknown). Whitelist happens
+        // in lib/kotRouting.js at read time, so a mistagged row still
+        // fires to the main kitchen rather than into an unlabeled queue.
+        const station = i.station ? String(i.station).toLowerCase() : undefined;
+        return {
+          id: i.id,
+          name: i.name,
+          price: Number(i.price) || 0,
+          category: i.category || i.category_name || 'General',
+          isVeg: i.is_veg !== undefined ? Boolean(i.is_veg) : Boolean(i.isVeg ?? true),
+          available: i.available !== undefined ? Boolean(i.available) : true,
+          ...(variants.length > 0 ? { variants } : {}),
+          ...(modifier_groups.length > 0 ? { modifier_groups } : {}),
+          ...(day_parts.length > 0 ? { day_parts } : {}),
+          ...(station ? { station } : {})
+        };
+      }) : [];
 
       // Fallback to default seed if Supabase table returns empty
       if (!categories.length && !items.length) {

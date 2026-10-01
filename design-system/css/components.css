@@ -11,7 +11,9 @@
    RESET & BASE
    ═══════════════════════════════════════════════════════════════ */
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
+@layer base {
+  * { box-sizing: border-box; }
+}
 
 html, body {
   height: 100%;
@@ -205,7 +207,7 @@ input, select, textarea { font-family: inherit; }
 }
 
 .card:hover {
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--shadow-flat);
 }
 
 .card-header {
@@ -230,7 +232,7 @@ input, select, textarea { font-family: inherit; }
   background: var(--color-canvas);
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-card-float);
+  box-shadow: var(--shadow-flat);
   overflow: hidden;
 }
 
@@ -252,7 +254,7 @@ input, select, textarea { font-family: inherit; }
 }
 
 .table-card:hover {
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--shadow-flat);
   transform: translateY(-1px);
 }
 
@@ -260,7 +262,7 @@ input, select, textarea { font-family: inherit; }
 
 .table-card.selected {
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px rgba(255, 87, 34, 0.2), var(--shadow-card);
+  box-shadow: 0 0 0 2px rgba(255, 87, 34, 0.2);
   background: var(--color-canvas);
 }
 
@@ -300,7 +302,7 @@ input, select, textarea { font-family: inherit; }
 }
 
 .kds-ticket:hover {
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--shadow-flat);
 }
 
 .ticket-inner { padding: var(--spacing-base); }
@@ -734,8 +736,11 @@ input, select, textarea { font-family: inherit; }
   display: flex;
   background: var(--color-canvas);
   border-top: 1px solid var(--color-hairline);
-  padding: 6px 8px 8px;
-  gap: 4px;
+  padding: 12px 12px calc(14px + env(safe-area-inset-bottom, 0px));
+  gap: 8px;
+  position: sticky;
+  bottom: 0;
+  z-index: 50;
 }
 
 .bottom-nav-item {
@@ -743,39 +748,58 @@ input, select, textarea { font-family: inherit; }
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
-  padding: 8px 4px;
-  border-radius: var(--radius-full);
-  font-size: 11px;
-  font-weight: 500;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 8px;
+  min-height: 60px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-body);
   color: var(--color-muted);
   background: transparent;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
   border: none;
   cursor: pointer;
   position: relative;
 }
 
+.bottom-nav-item:hover {
+  background: var(--color-surface-soft);
+  color: var(--color-ink);
+}
+
+.bottom-nav-item:active {
+  background: var(--color-hairline);
+}
+
 .bottom-nav-item.active {
-  background: var(--color-primary);
-  color: var(--color-on-primary);
+  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  color: var(--color-primary);
+}
+
+.bottom-nav-item.active:hover {
+  background: color-mix(in srgb, var(--color-primary) 18%, transparent);
 }
 
 .nav-badge {
   position: absolute;
-  top: 2px;
-  right: 14px;
+  top: 6px;
+  right: calc(50% - 22px);
   background: var(--color-primary);
   color: #ffffff;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   border-radius: var(--radius-full);
   padding: 1px 6px;
+  min-width: 16px;
+  text-align: center;
   font-family: var(--font-mono);
 }
 
 .bottom-nav-item.active .nav-badge {
-  background: var(--color-primary-active);
+  background: var(--color-primary);
+  color: #ffffff;
 }
 
 .tab-bar {
@@ -953,7 +977,7 @@ input, select, textarea { font-family: inherit; }
   padding: var(--spacing-lg);
   width: 100%;
   max-width: 480px;
-  box-shadow: var(--shadow-card-float);
+  box-shadow: var(--shadow-flat);
   animation: slideInUp 0.25s ease;
 }
 
@@ -980,7 +1004,7 @@ input, select, textarea { font-family: inherit; }
   flex-direction: column;
   align-items: center;
   gap: var(--spacing-base);
-  box-shadow: var(--shadow-card-float);
+  box-shadow: var(--shadow-flat);
 }
 
 .plan-gate-icon {

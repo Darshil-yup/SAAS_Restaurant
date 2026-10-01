@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { usePos } from '../context/PosContext';
-import { ChefHat, Clock, CheckCircle2, AlertCircle, Flame, Timer } from 'lucide-react';
+import { ChefHat, Clock, CheckCircle2, AlertCircle, Flame, Timer, StickyNote, Check } from 'lucide-react';
+import { Button } from '../components/ui/button';
+import { Badge } from '../components/ui/badge';
 
 const DEFAULT_URGENT_MINS = 12;
 
@@ -65,9 +67,9 @@ export const KitchenKdsView = ({ isLoading = false }) => {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-lg)' }}>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--spacing-base)' }}>
         <div>
           <h1 className="typography-display-xl" style={{ color: 'var(--color-ink)' }}>Kitchen Display System</h1>
           <div className="typography-body-sm" style={{ color: 'var(--color-muted)', marginTop: '2px' }}>
@@ -168,7 +170,7 @@ export const KitchenKdsView = ({ isLoading = false }) => {
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
                             transition: 'all 0.15s ease'
                           }}>
-                            {isChecked && <span style={{ fontSize: '11px', color: '#ffffff', fontWeight: 700 }}>✓</span>}
+                            {isChecked && <Check size={11} style={{ color: 'var(--color-on-primary)' }} />}
                           </div>
                           <span className="typography-body-sm" style={{ fontWeight: 500, color: 'var(--color-ink)' }}>
                             {item.qty > 1 && <span style={{ color: 'var(--color-primary)', fontWeight: 700 }}>{item.qty}× </span>}
@@ -181,12 +183,8 @@ export const KitchenKdsView = ({ isLoading = false }) => {
 
                   {/* Note */}
                   {ticket.note && (
-                    <div style={{
-                      background: 'var(--color-surface-soft)', borderRadius: 'var(--radius-xs)', padding: '8px 10px',
-                      fontSize: '12px', color: 'var(--color-body)', fontStyle: 'italic',
-                      borderLeft: '3px solid var(--color-primary)', marginBottom: '14px'
-                    }}>
-                      📝 {ticket.note}
+                    <div className="ticket-note" style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--spacing-xs)', marginBottom: 'var(--spacing-md)' }}>
+                      <StickyNote size={13} style={{ flexShrink: 0, marginTop: '1px' }} /> {ticket.note}
                     </div>
                   )}
 
@@ -195,20 +193,15 @@ export const KitchenKdsView = ({ isLoading = false }) => {
                     <span style={{ fontFamily: 'var(--font-mono)', fontSize: '14px', fontWeight: 700, color: 'var(--color-ink)' }}>
                       {currency}{ticket.items.reduce((s,i) => s + i.price * i.qty, 0)}
                     </span>
-                    <button
+                    <Button
                       onClick={() => markTicketReady(ticket.id, ticket.tableId)}
                       disabled={!canMark}
-                      className="typography-button-sm"
-                      style={{
-                        padding: '8px 14px', borderRadius: 'var(--radius-sm)',
-                        background: canMark ? 'var(--status-green-text)' : 'var(--color-surface-soft)',
-                        color: canMark ? '#ffffff' : 'var(--color-muted)',
-                        cursor: canMark ? 'pointer' : 'not-allowed',
-                        border: 'none', transition: 'all 0.15s ease',
-                      }}
+                      size="sm"
+                      className={canMark ? 'bg-[var(--status-green-text)] text-[var(--color-on-primary)] hover:bg-[var(--status-green-text)]/85' : ''}
+                      variant={canMark ? 'default' : 'outline'}
                     >
-                      {canMark ? '✓ Mark Ready' : 'Tick All Items'}
-                    </button>
+                      {canMark ? <><Check /> Mark Ready</> : 'Tick All Items'}
+                    </Button>
                   </div>
                 </div>
               </div>

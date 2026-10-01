@@ -15,6 +15,15 @@ import { syncQueue } from './lib/syncQueue.js';
 import { authenticateHubStaff } from './lib/supabaseClient.js';
 import { restaurantCache } from './lib/restaurantCache.js';
 import { priceOrder } from './lib/pricing.js';
+import { resolveEffectivePrice } from './lib/dayParts.js';
+import { buildInvoicePreview } from './lib/invoice.js';
+import { invoiceStore } from './lib/invoiceStore.js';
+import { renderKot, renderReceipt, sendToPrinter } from './lib/printer.js';
+import { groupTicketByStation } from './lib/kotRouting.js';
+import { waiterStore } from './lib/waiterStore.js';
+import { crashReporter, attachHubProcessHandlers } from './lib/crashReporter.js';
+
+attachHubProcessHandlers();
 import { deviceAuth, requireDevice, extractToken, isLoopback, trustLocalAddress } from './lib/deviceAuth.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -232,6 +241,22 @@ app.post('/orders', requireDevice, (req, res) => {
     return res.status(400).json({ error: 'Order must contain at least 1 item.' });
   }
 
+  // Stamp the ticket with the logged-in waiter's name when the handset supplies
+  // a valid waiter_id. Unknown ids are refused so a bad handset can't attribute
+  // its orders to someone else; missing ids fall back to the handset's own
+  // `created_by_waiter` string (backwards-compatible with pre-PR-9 clients).
+  if (orderData.waiter_id) {
+    const waiter = waiterStore.getById(orderData.waiter_id);
+    if (!waiter || waiter.active === false) {
+      return res.status(400).json({
+        error: 'Unknown or inactive waiter for this order.',
+        code: 'UNKNOWN_WAITER'
+      });
+    }
+    orderData.created_by_waiter = waiter.name;
+    orderData.waiter_id = waiter.id;
+  }
+
   // Idempotency check: if order_request_id seen within 60s, return original ticket immediately
   const reqId = orderData.order_request_id || orderData.requestId;
   if (reqId && recentRequests.has(reqId)) {
@@ -282,6 +307,12 @@ app.post('/orders', requireDevice, (req, res) => {
   // Step 3: Asynchronously trigger background cloud sync
   syncQueue.enqueueTicket(newTicket);
 
+  // Step 4: Fire-and-forget auto-KOT print if a printer is configured.
+  // Never blocks the order response — a stuck printer must not lose the
+  // order in the kitchen. Success/failure is logged and observable via
+  // POST /orders/:id/print-kot as a manual retry.
+  autoPrintKot(newTicket, pairing).catch(() => {});
+
   // Immediate success response to waiter handset
   res.status(201).json({
     success: true,
@@ -289,6 +320,36 @@ app.post('/orders', requireDevice, (req, res) => {
     ticket: newTicket
   });
 });
+
+async function autoPrintKot(ticket, pairing) {
+  const printers = hubConfig.getPrinters('kot');
+  if (printers.length === 0) return; // No KOT printer configured — silent no-op.
+  // Split by station (M2 · PR 15). A ticket with items across hot / cold /
+  // bar produces multiple KOTs, one per station, each carrying only its
+  // own items. A printer with a `station` field prints only jobs for that
+  // station; a printer with no station prints ALL jobs (fallback for
+  // single-printer deployments so nothing regresses).
+  //
+  // When the ticket resolves to a single station (the common case), no
+  // station label is added to the header — a T5 order of curries prints
+  // "KITCHEN ORDER TICKET" exactly as before PR 15. Once a split happens,
+  // every KOT in the split carries its station in the header so the cook
+  // can eyeball which one is theirs.
+  const groups = groupTicketByStation(ticket);
+  const shouldLabel = groups.length > 1;
+  for (const g of groups) {
+    const job = renderKot(g.ticket, pairing, shouldLabel ? { station_label: g.label } : {});
+    for (const p of printers) {
+      if (p.station && p.station !== g.station) continue;
+      const res = await sendToPrinter(job, { host: p.host, port: p.port });
+      if (res.ok) {
+        console.log(`🖨  KOT ${ticket.table_name || 'Table'} · #${ticket.ticket_number} [${g.station}] → ${p.id} (${res.sent_bytes ?? 0} bytes)`);
+      } else {
+        console.warn(`🖨  KOT print failed on ${p.id} [${g.station}]: ${res.error} [${res.code}]`);
+      }
+    }
+  }
+}
 
 // 4. GET /orders/active — Kitchen display restores open tickets on connect/reload
 app.get('/orders/active', requireDevice, (req, res) => {
@@ -337,6 +398,40 @@ app.post('/orders/:id/ready', requireDevice, (req, res) => {
 app.get('/menu', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const menuData = restaurantCache.getMenuCache(pairing.restaurant_id);
+  // Day-part enrichment (M2 · PR 13). We resolve the active window on every
+  // request so the handset gets the currently-effective price without having
+  // to duplicate the day-part logic client-side, and so the cart total the
+  // waiter sees matches what the hub bills at POST /orders — modulo up to
+  // one poll interval (~5s) of drift, which the server-authoritative
+  // re-pricing at order time closes anyway.
+  if (menuData && !menuData.uninitialized && Array.isArray(menuData.items)) {
+    const now = new Date();
+    menuData.items = menuData.items.map(i => {
+      const dayParts = Array.isArray(i.day_parts) ? i.day_parts : [];
+      const baseEff = resolveEffectivePrice(i, null, now);
+      const nextVariants = Array.isArray(i.variants)
+        ? i.variants.map(v => {
+            const ve = resolveEffectivePrice(i, v, now);
+            return {
+              ...v,
+              effective_price: ve.price,
+              active_day_part: ve.day_part_id
+                ? { id: ve.day_part_id, label: ve.day_part_label }
+                : null
+            };
+          })
+        : undefined;
+      return {
+        ...i,
+        effective_price: baseEff.price,
+        active_day_part: baseEff.day_part_id
+          ? { id: baseEff.day_part_id, label: baseEff.day_part_label }
+          : null,
+        ...(nextVariants ? { variants: nextVariants } : {}),
+        ...(dayParts.length > 0 ? { day_parts: dayParts } : {})
+      };
+    });
+  }
   res.json(menuData);
 });
 
@@ -411,45 +506,438 @@ app.get('/tables', requireDevice, (req, res) => {
   });
 });
 
-// 7. POST /tables/:id/clear — Clear table bill after guest payment
+function buildPreviewForTable(tableId, pairing, adjustments) {
+  const openTickets = ticketStore.getActiveTicketsForTable(tableId, pairing.restaurant_id);
+  if (openTickets.length === 0) {
+    return { status: 404, body: {
+      success: false,
+      error: `No open tickets for table ${tableId}.`,
+      code: 'NO_OPEN_TICKETS'
+    }};
+  }
+
+  const preview = buildInvoicePreview({
+    tickets: openTickets,
+    tableId,
+    tableName: openTickets[0].table_name,
+    restaurantId: pairing.restaurant_id,
+    currency: pairing.currency || '₹',
+    taxConfig: pairing,
+    adjustments
+  });
+
+  if (!preview.ok) {
+    return { status: 400, body: {
+      success: false,
+      error: preview.error,
+      code: 'INVALID_ADJUSTMENTS'
+    }};
+  }
+
+  const { ok: _ok, ...invoice } = preview;
+  return { status: 200, body: { success: true, preview: true, invoice } };
+}
+
+// 7a. GET /tables/:id/invoice — Preview the current bill for a table (any time)
+app.get('/tables/:id/invoice', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const { status, body } = buildPreviewForTable(req.params.id, pairing, undefined);
+  res.status(status).json(body);
+});
+
+// 7a-2. POST /tables/:id/invoice/preview — Preview with reception-supplied adjustments
+app.post('/tables/:id/invoice/preview', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const adjustments = (req.body && typeof req.body === 'object') ? req.body : {};
+  const { status, body } = buildPreviewForTable(req.params.id, pairing, adjustments);
+  res.status(status).json(body);
+});
+
+// 7b. GET /invoices/:id — Retrieve a previously issued invoice
+app.get('/invoices/:id', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const invoice = invoiceStore.getInvoice(req.params.id, pairing.restaurant_id);
+  if (!invoice) {
+    return res.status(404).json({ success: false, error: 'Invoice not found.' });
+  }
+  res.json({ success: true, invoice });
+});
+
+// 7c. GET /invoices — List issued invoices for this tenant
+app.get('/invoices', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  res.json({
+    success: true,
+    restaurant_id: pairing.restaurant_id,
+    invoices: invoiceStore.listInvoices(pairing.restaurant_id)
+  });
+});
+
+// 7d. POST /invoices/:id/void — Reopen the underlying tickets and record why
+app.post('/invoices/:id/void', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+
+  const result = invoiceStore.voidInvoice(req.params.id, pairing.restaurant_id, {
+    reason: body.reason,
+    actor: body.actor
+  });
+
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+
+  const invoice = result.invoice;
+  const reopened = ticketStore.reopenTickets(invoice.ticket_ids || [], pairing.restaurant_id);
+
+  broadcast('INVOICE_VOIDED', { invoice, reopened_ticket_ids: reopened });
+  console.log(`↩︎  Voided ${invoice.invoice_number} · ${invoice.currency || '₹'}${invoice.grand_total} · reason: ${invoice.voided_reason} · reopened ${reopened.length} ticket(s)`);
+
+  res.json({
+    success: true,
+    invoice,
+    reopened_ticket_ids: reopened,
+    tables: getLiveTables(pairing.restaurant_id)
+  });
+});
+
+// 7e. POST /invoices/:id/mark-paid — Record a settled payment against the invoice
+app.post('/invoices/:id/mark-paid', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+
+  const result = invoiceStore.markPaid(req.params.id, pairing.restaurant_id, {
+    method: body.payment_method,
+    actor: body.actor,
+    payment_ref: body.payment_ref
+  });
+
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+
+  broadcast('INVOICE_PAID', { invoice: result.invoice });
+  console.log(`💰 Marked ${result.invoice.invoice_number} paid · ${result.invoice.payment_method} · ${result.invoice.currency || '₹'}${result.invoice.grand_total}`);
+
+  res.json({ success: true, invoice: result.invoice });
+});
+
+// 7c-2. GET /waiters — Active waiters (public shape only; PIN hashes never leave the hub)
+app.get('/waiters', requireDevice, (req, res) => {
+  res.json({ success: true, waiters: waiterStore.listActive() });
+});
+
+// 7c-3. POST /waiters/login — Verify a 4-digit PIN for a specific waiter
+app.post('/waiters/login', requireDevice, (req, res) => {
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+  const result = waiterStore.verify(body.waiter_id, body.pin);
+  if (!result.ok) {
+    return res.status(401).json({ success: false, error: result.error, code: result.code });
+  }
+  res.json({ success: true, waiter: result.waiter });
+});
+
+// 7c-4. POST /waiters — Add a new waiter (reception / admin flow)
+app.post('/waiters', requireDevice, (req, res) => {
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+  const result = waiterStore.addWaiter({ name: body.name, pin: body.pin });
+  if (!result.ok) {
+    return res.status(400).json({ success: false, error: result.error, code: result.code });
+  }
+  res.status(201).json({ success: true, waiter: result.waiter });
+});
+
+// 7c-5. DELETE /waiters/:id — Deactivate (soft delete preserves ticket history)
+app.delete('/waiters/:id', requireDevice, (req, res) => {
+  const result = waiterStore.deactivate(req.params.id);
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+  res.json({ success: true });
+});
+
+// 7d-2. GET /printers — Configured printers (safe to expose to reception UI)
+app.get('/printers', requireDevice, (req, res) => {
+  res.json({ success: true, printers: hubConfig.getPrinters() });
+});
+
+// 7d-3. POST /orders/:id/print-kot — Explicit reprint of a ticket's KOT
+app.post('/orders/:id/print-kot', requireDevice, async (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const id = req.params.id;
+  const ticket = ticketStore.getAllTickets(pairing.restaurant_id).find(t =>
+    t.id === id || String(t.ticket_number) === String(id)
+  );
+  if (!ticket) return res.status(404).json({ success: false, error: 'Ticket not found.', code: 'NOT_FOUND' });
+
+  // Reprint mirrors the auto-print split (M2 · PR 15) — one KOT per
+  // station, so a reprint after paper-out on the bar printer only re-
+  // fires the bar-station lines, not the whole hot-line ticket.
+  const groups = groupTicketByStation(ticket);
+  const printers = hubConfig.getPrinters('kot');
+  const results = [];
+  const previewTexts = [];
+  if (groups.length === 0) {
+    // Legacy safety: never-empty ticket somehow arrived here. Fall back
+    // to the pre-PR-15 behaviour so nothing regresses.
+    const job = renderKot(ticket, pairing);
+    previewTexts.push(job.preview_text);
+    results.push({ printer_id: 'preview', ok: true, preview: true });
+  } else {
+    const shouldLabel = groups.length > 1;
+    for (const g of groups) {
+      const job = renderKot(g.ticket, pairing, shouldLabel ? { station_label: g.label } : {});
+      previewTexts.push(job.preview_text);
+      if (printers.length === 0) {
+        results.push({ printer_id: 'preview', station: g.station, ok: true, preview: true });
+      } else {
+        for (const p of printers) {
+          if (p.station && p.station !== g.station) continue;
+          const r = await sendToPrinter(job, { host: p.host, port: p.port });
+          results.push({ printer_id: p.id, station: g.station, ...r });
+        }
+      }
+    }
+  }
+  console.log(`🖨  KOT reprint #${ticket.ticket_number} → ${results.map(r => `${r.printer_id}[${r.station || '*'}]:${r.ok ? 'ok' : r.code}`).join(', ')}`);
+  res.json({ success: true, ticket_id: ticket.id, results, preview_text: previewTexts.join('\n') });
+});
+
+// 7d-4. POST /invoices/:id/print-receipt — Customer receipt for the reception printer
+app.post('/invoices/:id/print-receipt', requireDevice, async (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const invoice = invoiceStore.getInvoice(req.params.id, pairing.restaurant_id);
+  if (!invoice) return res.status(404).json({ success: false, error: 'Invoice not found.', code: 'NOT_FOUND' });
+
+  const job = renderReceipt(invoice, pairing);
+  const printers = hubConfig.getPrinters('receipt');
+  const results = [];
+  if (printers.length === 0) {
+    results.push({ printer_id: 'preview', ok: true, preview: true });
+  } else {
+    for (const p of printers) {
+      const r = await sendToPrinter(job, { host: p.host, port: p.port });
+      results.push({ printer_id: p.id, ...r });
+    }
+  }
+  console.log(`🧾 Receipt ${invoice.invoice_number} → ${results.map(r => `${r.printer_id}:${r.ok ? 'ok' : r.code}`).join(', ')}`);
+  res.json({ success: true, invoice_number: invoice.invoice_number, results, preview_text: job.preview_text });
+});
+
+// 7e-2. POST /invoices/:id/refund — Reverse a paid invoice (parent + all paid splits)
+app.post('/invoices/:id/refund', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+
+  const result = invoiceStore.refund(req.params.id, pairing.restaurant_id, {
+    reason: body.reason,
+    actor: body.actor
+  });
+
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+
+  broadcast('INVOICE_REFUNDED', { invoice: result.invoice });
+  console.log(`↩︎ Refunded ${result.invoice.invoice_number} · ${result.invoice.currency || '₹'}${result.invoice.grand_total} · reason: ${result.invoice.refund_reason}`);
+  res.json({ success: true, invoice: result.invoice });
+});
+
+// 7f. POST /invoices/:id/split-by-seats — Divide grand_total into N equal shares
+app.post('/invoices/:id/split-by-seats', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+
+  const result = invoiceStore.splitBySeats(req.params.id, pairing.restaurant_id, {
+    count: body.count,
+    actor: body.actor
+  });
+
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+
+  broadcast('INVOICE_SPLIT', { invoice: result.invoice });
+  console.log(`🪓 Split ${result.invoice.invoice_number} into ${result.invoice.splits.length} seat share(s)`);
+  res.json({ success: true, invoice: result.invoice });
+});
+
+// 7f-3. POST /invoices/:id/split-by-items — Per-split item assignment
+app.post('/invoices/:id/split-by-items', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+
+  const result = invoiceStore.splitByItems(req.params.id, pairing.restaurant_id, {
+    splits: body.splits,
+    actor: body.actor
+  });
+
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+
+  broadcast('INVOICE_SPLIT', { invoice: result.invoice });
+  console.log(`🪓 Split ${result.invoice.invoice_number} by item into ${result.invoice.splits.length} share(s)`);
+  res.json({ success: true, invoice: result.invoice });
+});
+
+// 7f-2. POST /invoices/:id/split-by-amounts — Reception-supplied per-split amounts
+app.post('/invoices/:id/split-by-amounts', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+
+  const result = invoiceStore.splitByAmounts(req.params.id, pairing.restaurant_id, {
+    splits: body.splits,
+    actor: body.actor
+  });
+
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+
+  broadcast('INVOICE_SPLIT', { invoice: result.invoice });
+  console.log(`🪓 Split ${result.invoice.invoice_number} by amount into ${result.invoice.splits.length} share(s)`);
+  res.json({ success: true, invoice: result.invoice });
+});
+
+// 7g. DELETE /invoices/:id/splits — Undo the split (only if nothing is paid yet)
+app.delete('/invoices/:id/splits', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const result = invoiceStore.unsplit(req.params.id, pairing.restaurant_id);
+
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+
+  broadcast('INVOICE_UNSPLIT', { invoice: result.invoice });
+  console.log(`↩︎ Unsplit ${result.invoice.invoice_number}`);
+  res.json({ success: true, invoice: result.invoice });
+});
+
+// 7h. POST /invoices/:id/splits/:index/mark-paid — Settle one seat share
+app.post('/invoices/:id/splits/:index/mark-paid', requireDevice, (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+
+  const result = invoiceStore.markSplitPaid(req.params.id, pairing.restaurant_id, {
+    splitIndex: Number(req.params.index),
+    method: body.payment_method,
+    actor: body.actor,
+    payment_ref: body.payment_ref
+  });
+
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ success: false, error: result.error, code: result.code });
+  }
+
+  broadcast('INVOICE_SPLIT_PAID', {
+    invoice: result.invoice,
+    split_index: Number(req.params.index),
+    parent_settled: result.parent_settled
+  });
+  if (result.parent_settled) {
+    broadcast('INVOICE_PAID', { invoice: result.invoice });
+  }
+  console.log(`💰 Split ${Number(req.params.index) + 1}/${result.invoice.splits.length} of ${result.invoice.invoice_number} paid · ${body.payment_method}${result.parent_settled ? ' · parent settled' : ''}`);
+
+  res.json({ success: true, invoice: result.invoice, parent_settled: result.parent_settled });
+});
+
+function issueInvoiceForTable(tableId, pairing, adjustments) {
+  const openTickets = ticketStore.getActiveTicketsForTable(tableId, pairing.restaurant_id);
+  if (openTickets.length === 0) return { ok: true, invoice: null };
+  const result = invoiceStore.issueInvoice({
+    tickets: openTickets,
+    tableId,
+    tableName: openTickets[0].table_name,
+    restaurantId: pairing.restaurant_id,
+    currency: pairing.currency || '₹',
+    taxConfig: pairing,
+    adjustments
+  });
+  if (!result.ok) return { ok: false, error: result.error };
+  return { ok: true, invoice: result.invoice };
+}
+
+// 7. POST /tables/:id/clear — Close a bill: issue invoice, then complete tickets
 app.post('/tables/:id/clear', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const tableId = req.params.id;
+  const adjustments = (req.body && typeof req.body === 'object') ? req.body : undefined;
+
+  // Issue the invoice BEFORE clearing so the tickets are still queryable.
+  // invoiceStore.issueInvoice is idempotent per (table, ticket ids), so a
+  // network-retry double-POST cannot produce a second invoice.
+  const issued = issueInvoiceForTable(tableId, pairing, adjustments);
+  if (!issued.ok) {
+    return res.status(400).json({
+      success: false,
+      error: issued.error,
+      code: 'INVALID_ADJUSTMENTS'
+    });
+  }
+  const invoice = issued.invoice;
 
   const { clearedCount, clearedTickets } = ticketStore.clearTableTickets(tableId, pairing.restaurant_id);
 
-  // Queue corresponding Supabase status updates (orders.status = 'completed') cloud-async
   if (clearedTickets && clearedTickets.length > 0) {
     clearedTickets.forEach(t => {
       syncQueue.enqueueStatusUpdate(t.ticket_number || t.id, 'completed', pairing.restaurant_id);
     });
   }
 
-  // Broadcast CLEAR_TABLE and alias events to all WS clients over LAN
   const clearPayload = {
     table_id: Number(tableId) || tableId,
     order_id: tableId,
     cleared_count: clearedCount,
-    status: 'available'
+    status: 'available',
+    invoice_number: invoice?.invoice_number || null,
+    grand_total: invoice?.grand_total ?? null
   };
   broadcast('CLEAR_TABLE', clearPayload);
   broadcast('bill_cleared', clearPayload);
   broadcast('order_cleared', clearPayload);
+  if (invoice) broadcast('INVOICE_ISSUED', { invoice });
 
   const updatedTables = getLiveTables(pairing.restaurant_id);
-  console.log(`🧹 Cleared bill for Table ${tableId} (${clearedCount} ticket(s) completed, queued for cloud sync)`);
+  if (invoice) {
+    console.log(`🧾 Issued ${invoice.invoice_number} for Table ${tableId} · ${pairing.currency || '₹'}${invoice.grand_total} · ${clearedCount} ticket(s) completed`);
+  } else {
+    console.log(`🧹 Cleared bill for Table ${tableId} (${clearedCount} ticket(s) completed, no invoice — no open tickets)`);
+  }
 
   res.json({
     success: true,
     table_id: tableId,
     cleared_count: clearedCount,
-    tables: updatedTables
+    tables: updatedTables,
+    invoice: invoice || null
   });
 });
 
 app.post('/orders/:id/clear', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const id = req.params.id;
+  const adjustments = (req.body && typeof req.body === 'object') ? req.body : undefined;
+
+  const issued = issueInvoiceForTable(id, pairing, adjustments);
+  if (!issued.ok) {
+    return res.status(400).json({
+      success: false,
+      error: issued.error,
+      code: 'INVALID_ADJUSTMENTS'
+    });
+  }
+  const invoice = issued.invoice;
 
   const { clearedCount, clearedTickets } = ticketStore.clearTableTickets(id, pairing.restaurant_id);
 
@@ -463,20 +951,28 @@ app.post('/orders/:id/clear', requireDevice, (req, res) => {
     table_id: Number(id) || id,
     order_id: id,
     cleared_count: clearedCount,
-    status: 'available'
+    status: 'available',
+    invoice_number: invoice?.invoice_number || null,
+    grand_total: invoice?.grand_total ?? null
   };
   broadcast('CLEAR_TABLE', orderClearPayload);
   broadcast('bill_cleared', orderClearPayload);
   broadcast('order_cleared', orderClearPayload);
+  if (invoice) broadcast('INVOICE_ISSUED', { invoice });
 
   const updatedTables = getLiveTables(pairing.restaurant_id);
-  console.log(`🧹 Cleared bill for Order/Table ${id} (${clearedCount} ticket(s) completed, queued for cloud sync)`);
+  if (invoice) {
+    console.log(`🧾 Issued ${invoice.invoice_number} for Order/Table ${id} · ${pairing.currency || '₹'}${invoice.grand_total}`);
+  } else {
+    console.log(`🧹 Cleared bill for Order/Table ${id} (${clearedCount} ticket(s) completed)`);
+  }
 
   res.json({
     success: true,
     id,
     cleared_count: clearedCount,
-    tables: updatedTables
+    tables: updatedTables,
+    invoice: invoice || null
   });
 });
 
@@ -496,6 +992,33 @@ app.post('/sync/requeue-quarantine', async (req, res) => {
   }
   const result = await syncQueue.requeueQuarantined();
   res.json({ success: true, ...result, sync: syncQueue.getStatus() });
+});
+
+// 8b. POST /crash-report — Client-side crash sink for the KDS + waiter PWA
+//
+// Intentionally NOT gated behind requireDevice — a crash could happen before
+// the handset finished enrolling, and losing that crash to a 401 is worse
+// than accepting one from a device that doesn't own a token yet. Payloads are
+// heavily size-capped in the reporter itself, and CORS is already restricted
+// to LAN/loopback so this isn't reachable from a public tab.
+app.post('/crash-report', (req, res) => {
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+  const entry = crashReporter.report({
+    source: body.source,
+    message: body.message,
+    stack: body.stack,
+    url: body.url,
+    user_agent: body.user_agent || req.get('user-agent'),
+    extra: body.extra
+  });
+  console.warn(`💥 crash reported · ${entry.source} · ${entry.message}`);
+  res.status(202).json({ success: true, id: entry.id });
+});
+
+// 8c. GET /crash-log — Recent crashes (auth'd, for reception debugging)
+app.get('/crash-log', requireDevice, (req, res) => {
+  const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+  res.json({ success: true, entries: crashReporter.list({ limit }) });
 });
 
 // 9. POST /toggle-outage — Outage simulator. Demo tooling only: it forces the hub
