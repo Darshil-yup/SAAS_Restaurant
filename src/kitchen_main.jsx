@@ -752,6 +752,14 @@ const KitchenHubApp = () => {
                 Type this on a waiter handset if it cannot scan the QR code.
               </div>
             </div>
+            {/* Handsets that cannot scan the QR type this code once to enrol.
+                It is only ever served to this screen, never over the LAN. */}
+            <div style={{ marginTop: '8px', background: 'var(--color-surface-soft)', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', color: 'var(--color-body)' }}>
+              Enrollment Code: <strong style={{ color: 'var(--color-primary)', fontFamily: 'var(--font-mono)', letterSpacing: '2px' }}>{enrollmentCode || '---'}</strong>
+              <div style={{ fontSize: '10px', color: 'var(--color-muted)', marginTop: '2px' }}>
+                Type this on a waiter handset if it cannot scan the QR code.
+              </div>
+            </div>
           </div>
 
           {/* Quick Metrics Card */}
@@ -861,10 +869,71 @@ const KitchenHubApp = () => {
                                 }}>
                                   {isChecked && <Check size={10} />}
                                 </div>
-                                <span className="typography-caption" style={{ color: 'var(--color-ink)' }}>
-                                  {item.qty > 1 && <strong style={{ color: 'var(--color-primary)' }}>{item.qty}× </strong>}
-                                  {item.name}
-                                </span>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                                  <span className="typography-caption" style={{ color: 'var(--color-ink)' }}>
+                                    {item.qty > 1 && <strong style={{ color: 'var(--color-primary)' }}>{item.qty}× </strong>}
+                                    {item.name}
+                                    {item.variant_label && (
+                                      <span style={{ fontSize: '12px', color: 'var(--color-muted)', fontWeight: 500, marginLeft: 4 }}>
+                                        · {item.variant_label}
+                                      </span>
+                                    )}
+                                    {item.day_part_label && (
+                                      <span
+                                        title={`Billed at ${item.day_part_label}`}
+                                        style={{
+                                          fontSize: 10, color: 'var(--status-green-text)', fontFamily: 'var(--font-mono)',
+                                          background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)',
+                                          padding: '1px 6px', borderRadius: 'var(--radius-full)', marginLeft: 6, verticalAlign: 'middle'
+                                        }}
+                                      >
+                                        {String(item.day_part_label).toUpperCase()}
+                                      </span>
+                                    )}
+                                    {/* Station routing tag (M2 · PR 15). Only
+                                        surfaced when the item was explicitly
+                                        routed off the default hot line, so
+                                        curries don't get a "HOT" tag on every
+                                        ticket — only bar drinks and cold-
+                                        prep items call for a routing note. */}
+                                    {item.station && item.station !== 'hot' && (
+                                      <span
+                                        title={`Fires to ${item.station} station`}
+                                        style={{
+                                          fontSize: 10, color: 'var(--color-primary)', fontFamily: 'var(--font-mono)',
+                                          background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)',
+                                          padding: '1px 6px', borderRadius: 'var(--radius-full)', marginLeft: 6, verticalAlign: 'middle',
+                                          fontWeight: 700
+                                        }}
+                                      >
+                                        {String(item.station).toUpperCase()}
+                                      </span>
+                                    )}
+                                  </span>
+                                  {/* KDS modifier lines (M2 · PR 12). The kitchen
+                                      sees "· Spice level: Hot" for prep instructions
+                                      and "+ Extra cheese" for paid extras (delta is
+                                      priced elsewhere; on the KDS card we highlight
+                                      what the cook needs to prep). */}
+                                  {Array.isArray(item.modifiers) && item.modifiers.length > 0 && (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 1, paddingLeft: 4 }}>
+                                      {item.modifiers.map((m, mi) => {
+                                        const delta = Number(m.price_delta) || 0;
+                                        return (
+                                          <span key={mi} style={{
+                                            fontSize: 11,
+                                            color: delta > 0 ? 'var(--color-primary)' : 'var(--color-muted)',
+                                            fontWeight: delta > 0 ? 600 : 500
+                                          }}>
+                                            {delta === 0
+                                              ? `· ${m.group_label ? m.group_label + ': ' : ''}${m.option_label}`
+                                              : `+ ${m.option_label}`}
+                                          </span>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             );
                           })}
@@ -880,7 +949,6 @@ const KitchenHubApp = () => {
                       {/* Bottom Action */}
                       <div style={{ borderTop: '1px solid var(--color-hairline)', paddingTop: 'var(--spacing-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                         <span className="typography-badge" style={{ color: 'var(--color-muted)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-
                           By {ticket.created_by_waiter || 'Waiter'}
                         </span>
                         <button
@@ -1005,10 +1073,56 @@ const KitchenHubApp = () => {
                                     {line.qty}×
                                   </span>
                                   {line.name}
+                                  {line.variant_label && (
+                                    <span style={{ fontSize: '11px', color: 'var(--color-muted)', fontWeight: 500, marginLeft: 6 }}>
+                                      · {line.variant_label}
+                                    </span>
+                                  )}
+                                  {line.day_part_label && (
+                                    <span
+                                      title={`Billed at ${line.day_part_label}`}
+                                      style={{
+                                        fontSize: 9, color: 'var(--status-green-text)', fontFamily: 'var(--font-mono)',
+                                        background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)',
+                                        padding: '1px 5px', borderRadius: 'var(--radius-full)', marginLeft: 6, verticalAlign: 'middle'
+                                      }}
+                                    >
+                                      {String(line.day_part_label).toUpperCase()}
+                                    </span>
+                                  )}
                                 </div>
                                 <div style={{ fontSize: '10px', color: 'var(--color-muted)', fontFamily: 'var(--font-mono)', marginTop: 1 }}>
                                   #{line.ticket_number} · {billInvoice.currency}{line.price} each
                                 </div>
+                                {/* Modifier detail on the bill preview (M2 · PR 12).
+                                    Zero-delta prep lines describe how the dish was
+                                    prepared; positive deltas surface the paid extra
+                                    with its per-unit contribution so reception can
+                                    explain the line to the guest. */}
+                                {Array.isArray(line.modifiers) && line.modifiers.length > 0 && (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 1, marginTop: 2, paddingLeft: 4 }}>
+                                    {line.modifiers.map((m, mi) => {
+                                      const delta = Number(m.price_delta) || 0;
+                                      return (
+                                        <div key={mi} style={{
+                                          fontSize: 10, color: 'var(--color-muted)',
+                                          display: 'flex', justifyContent: 'space-between', gap: 6
+                                        }}>
+                                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            {delta === 0
+                                              ? `· ${m.group_label ? m.group_label + ': ' : ''}${m.option_label}`
+                                              : `+ ${m.option_label}`}
+                                          </span>
+                                          {delta !== 0 && (
+                                            <span style={{ fontFamily: 'var(--font-mono)', color: delta > 0 ? 'var(--color-primary)' : 'var(--status-green-text)' }}>
+                                              {delta > 0 ? '+' : '−'}{billInvoice.currency}{Math.abs(delta)} × {line.qty}
+                                            </span>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
                               </div>
                               <div style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', fontWeight: 700, color: 'var(--color-ink)' }}>
                                 {billInvoice.currency}{line.line_total}

@@ -18,11 +18,11 @@ export const OrderDraftDrawer = ({ selectedTableId, draftItems, onRemoveItem, on
 
   const currency = currentRestaurant?.currency || '₹';
   const table = tables.find(t => t.id === selectedTableId);
+  // M2 · PR 11 variants: draftItems is now `{ [lineKey]: { item_id, variant_id?,
+  // variant_label?, name, price, isVeg, qty } }`. Just iterate values — each
+  // row already carries the resolved variant display + price at add-time.
   const draftMenu = Object.entries(draftItems)
-    .map(([id, qty]) => {
-      const item = menu.find(m => m.id === id);
-      return item ? { ...item, qty } : null;
-    })
+    .map(([lineKey, row]) => (row ? { lineKey, ...row } : null))
     .filter(Boolean);
 
   const subtotal = draftMenu.reduce((s, i) => s + i.price * i.qty, 0);
@@ -40,7 +40,20 @@ export const OrderDraftDrawer = ({ selectedTableId, draftItems, onRemoveItem, on
       order_request_id: orderRequestId,
       table_id: selectedTableId,
       table_name: table ? table.name : `Table ${selectedTableId}`,
-      items: draftMenu.map(i => ({ id: i.id, name: i.name, qty: i.qty, price: i.price })),
+      items: draftMenu.map(i => ({
+        id: i.item_id,
+        name: i.name,
+        qty: i.qty,
+        price: i.price,
+        // Server ignores handset-supplied prices and re-prices from its own menu
+        // cache; variant_id + modifiers[].{group_id, option_id} are the only
+        // routing bits reception can't fake. Modifier labels and price_delta
+        // arrive back on the response and are ignored on the way out.
+        ...(i.variant_id ? { variant_id: i.variant_id } : {}),
+        ...(Array.isArray(i.modifiers) && i.modifiers.length > 0
+          ? { modifiers: i.modifiers.map(m => ({ group_id: m.group_id, option_id: m.option_id })) }
+          : {})
+      })),
       note: note.trim(),
       // Server ignores this string and stamps waiter.name from waiter_id, so
       // the value here is only a display fallback.
@@ -148,20 +161,76 @@ export const OrderDraftDrawer = ({ selectedTableId, draftItems, onRemoveItem, on
         </div>
       ) : (
         <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {draftMenu.map(item => (
-            <div key={item.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
-                <VegBadge isVeg={item.isVeg} size={8} />
-                <span className="typography-body-sm" style={{ color: 'var(--color-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {item.qty > 1 && <span style={{ color: 'var(--color-primary)', fontFamily: 'var(--font-mono)', marginRight: '4px', fontWeight: 700 }}>{item.qty}×</span>}
-                  {item.name}
-                </span>
+          {draftMenu.map(item => {
+            const mods = Array.isArray(item.modifiers) ? item.modifiers : [];
+            return (
+              <div key={item.lineKey || item.id} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+                    <VegBadge isVeg={item.isVeg} size={8} />
+                    <span className="typography-body-sm" style={{ color: 'var(--color-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {item.qty > 1 && <span style={{ color: 'var(--color-primary)', fontFamily: 'var(--font-mono)', marginRight: '4px', fontWeight: 700 }}>{item.qty}×</span>}
+                      {item.name}
+                      {item.variant_label && (
+                        <span style={{ fontSize: '11px', color: 'var(--color-muted)', fontWeight: 500, marginLeft: 4 }}>
+                          · {item.variant_label}
+                        </span>
+                      )}
+                      {item.active_day_part && (
+                        <Badge variant="outline" className="ml-1.5 text-[9px] font-mono" style={{
+                          color: 'var(--status-green-text)', background: 'var(--status-green-bg)',
+                          borderColor: 'var(--status-green-border)'
+                        }}>
+                          {String(item.active_day_part.label).toUpperCase()}
+                        </Badge>
+                      )}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                    {mods.length > 0 && (
+                      <button
+                        onClick={() => onRemoveItem(item.lineKey)}
+                        title="Remove one"
+                        style={{
+                          background: 'transparent', border: 'none', color: 'var(--status-rust-text)',
+                          cursor: 'pointer', padding: 0, fontSize: 11, lineHeight: 1
+                        }}
+                      >
+                        −
+                      </button>
+                    )}
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', color: 'var(--color-ink)', fontWeight: 700 }}>
+                      {currency}{item.price * item.qty}
+                    </span>
+                  </div>
+                </div>
+                {mods.length > 0 && (
+                  <div style={{ paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    {mods.map((m, idx) => {
+                      const delta = Number(m.price_delta) || 0;
+                      return (
+                        <div key={idx} style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          fontSize: 11, color: 'var(--color-muted)', fontFamily: 'var(--font-body)'
+                        }}>
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {delta === 0
+                              ? `· ${m.group_label ? m.group_label + ': ' : ''}${m.option_label}`
+                              : `+ ${m.option_label}`}
+                          </span>
+                          {delta !== 0 && (
+                            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: delta > 0 ? 'var(--color-primary)' : 'var(--status-green-text)' }}>
+                              {delta > 0 ? '+' : '−'}{currency}{Math.abs(delta) * item.qty}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', color: 'var(--color-ink)', fontWeight: 700, flexShrink: 0 }}>
-                {currency}{item.price * item.qty}
-              </span>
-            </div>
-          ))}
+            );
+          })}
 
           {/* Subtotal Display (Single loud rating-display moment for mobile drawer total) */}
           <div style={{ borderTop: '1px solid var(--color-hairline)', marginTop: '8px', paddingTop: '12px', textAlign: 'center' }}>

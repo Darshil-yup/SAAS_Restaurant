@@ -43,20 +43,52 @@ function line(width, ch) { return ch.repeat(width); }
 // Kitchen Order Ticket (KOT)
 // ---------------------------------------------------------------------------
 
-export function renderKot(ticket, tenant = {}) {
+export function renderKot(ticket, tenant = {}, opts = {}) {
   if (!ticket || !Array.isArray(ticket.items)) {
     throw new Error('renderKot requires a ticket with items[]');
   }
   const width = KOT_WIDTH;
-  const header = center('KITCHEN ORDER TICKET', width);
+  // Optional station label (M2 · PR 15): when a ticket is split across
+  // stations we render one KOT per station, each carrying its own header
+  // suffix ("KITCHEN ORDER · BAR") so the cook can eyeball at a glance
+  // where the ticket belongs. Legacy single-KOT callers pass no opts and
+  // the header stays exactly as before.
+  const stationLabel = opts && opts.station_label ? String(opts.station_label) : '';
+  const headerText = stationLabel
+    ? `KITCHEN ORDER · ${stationLabel.toUpperCase()}`
+    : 'KITCHEN ORDER TICKET';
+  const header = center(headerText, width);
   const table  = center(`${ticket.table_name || 'Table'}   ·   #${ticket.ticket_number ?? ''}`, width);
   const when   = center(formatDate(ticket.created_at || Date.now()), width);
   const by     = center(`By: ${ticket.created_by_waiter || 'Waiter'}`, width);
 
-  const itemLines = ticket.items.map(i => {
+  // KOT modifier rendering (M2 · PR 12): options list under the item, two-
+  // space indent so the kitchen scans qty/name at the left margin and picks
+  // up modifiers as sub-lines. Zero-delta modifiers are prep instructions
+  // ("Spice: Hot", "No onion") and don't print a price; positive deltas do
+  // ("+ Extra cheese +₹40"). The kitchen doesn't need money for prep, but
+  // seeing the +₹ helps when a substitution is challenged.
+  const modLine = (m) => {
+    const label = String(m?.option_label || '');
+    const delta = Number(m?.price_delta) || 0;
+    if (delta > 0) return `  + ${label} +₹${delta}`;
+    if (delta < 0) return `  + ${label} -₹${Math.abs(delta)}`;
+    // Group label helps the kitchen distinguish "Spice: Hot" from a bare "Hot".
+    const group = m?.group_label ? `${m.group_label}: ` : '';
+    return `  · ${group}${label}`;
+  };
+  const itemLines = ticket.items.flatMap(i => {
     const qty = Number(i?.qty) || 0;
     const name = String(i?.name || '');
-    return `${qty}x ${name}`;
+    const variant = i?.variant_label ? ` (${i.variant_label})` : '';
+    // Day-part attribution (M2 · PR 13): a "· Happy hour" suffix so the
+    // kitchen sees which promotion the line was billed at. Prep-time
+    // decisions (portion size, sides) don't change, but a challenged
+    // receipt can be reconciled straight from the KOT.
+    const dayPart = i?.day_part_label ? ` · ${i.day_part_label}` : '';
+    const head = `${qty}x ${name}${variant}${dayPart}`;
+    const mods = Array.isArray(i?.modifiers) ? i.modifiers.map(modLine) : [];
+    return [head, ...mods];
   });
 
   const noteLines = ticket.note
@@ -82,7 +114,7 @@ export function renderKot(ticket, tenant = {}) {
     escpos.alignCenter(),
     escpos.rule(width, '='),
     escpos.bold(true), escpos.size(2, 2),
-    escpos.line('KITCHEN ORDER TICKET'),
+    escpos.line(headerText),
     escpos.size(1, 1), escpos.bold(false),
     escpos.rule(width, '='),
     escpos.bold(true), escpos.size(2, 1),
@@ -123,12 +155,45 @@ export function renderReceipt(invoice, tenant = {}) {
   // Layout: qty (3) + name (23) + total (padLeft 8) + gap columns
   // "Item".padRight(20) + "Qty".padLeft(4) + "Price".padLeft(8) + "Total".padLeft(9)
   const colHeader = padRight('Item', 20) + padLeft('Qty', 4) + padLeft('Price', 8) + padLeft('Total', 9);
-  const itemLines = invoice.items.map(l => {
-    const nm = String(l.name || '').slice(0, 20);
-    return padRight(nm, 20)
-         + padLeft(String(l.qty), 4)
-         + padLeft(String(l.price), 8)
-         + padLeft(String(l.line_total), 9);
+  // Receipt modifier rendering (M2 · PR 12): under each item, one sub-line
+  // per modifier — same 20-char left column, no qty/price for zero-delta
+  // "prep" modifiers (they inform the kitchen, not the customer), a right-
+  // aligned delta column for paid modifiers so the customer can reconcile.
+  // The head-line `price` and `line_total` already include modifier deltas
+  // (the hub applies them per-unit in pricing.js), so we don't double-count
+  // by summing deltas here — this block is display only.
+  const itemLines = invoice.items.flatMap(l => {
+    const base = String(l.name || '');
+    const variantSuffix = l.variant_label ? ` — ${l.variant_label}` : '';
+    const nm = (base + variantSuffix).slice(0, 20);
+    const head = padRight(nm, 20)
+      + padLeft(String(l.qty), 4)
+      + padLeft(String(l.price), 8)
+      + padLeft(String(l.line_total), 9);
+    // Day-part sub-line (M2 · PR 13). Zero-width numeric columns since the
+    // window's price is already reflected in `l.price`; the sub-line just
+    // annotates WHY that number is what it is, so a challenged bill can
+    // reference "Happy hour" without a receipt reprint.
+    const dayPartLine = l.day_part_label
+      ? [padRight(`  · ${l.day_part_label}`.slice(0, width), width)]
+      : [];
+    const mods = Array.isArray(l.modifiers) ? l.modifiers : [];
+    const modLines = mods.map(m => {
+      const label = String(m?.option_label || '');
+      const delta = Number(m?.price_delta) || 0;
+      if (delta === 0) {
+        // "  · Spice: Hot" style, spans the whole width, no numeric columns.
+        const group = m?.group_label ? `${m.group_label}: ` : '';
+        return padRight(`  · ${group}${label}`.slice(0, width), width);
+      }
+      const sign = delta > 0 ? '+' : '−';
+      const amt = `${sign}₹${Math.abs(delta)}`;
+      return padRight(`  + ${label}`.slice(0, 20), 20)
+        + padLeft('', 4)
+        + padLeft('', 8)
+        + padLeft(amt, 9);
+    });
+    return [head, ...dayPartLine, ...modLines];
   });
 
   function summaryRow(label, amount) {

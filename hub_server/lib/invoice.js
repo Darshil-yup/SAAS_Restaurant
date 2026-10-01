@@ -25,7 +25,20 @@ function enrichLine(ticket, line, menuById) {
     price: Number(line?.price) || 0,
     line_total: (Number(line?.qty) || 0) * (Number(line?.price) || 0),
     isVeg: menuItem?.isVeg,
-    category: menuItem?.category
+    category: menuItem?.category,
+    // Passed through so the modal, receipt renderer, and KDS ticket can
+    // render "Paneer Butter Masala — Half" without touching the menu cache.
+    variant_id: line?.variant_id || null,
+    variant_label: line?.variant_label || null,
+    // Modifiers (M2 · PR 12) travel on the invoice line the same way
+    // variants do — resolved labels + deltas so the receipt/KDS/modal can
+    // render "  + Extra cheese +₹40" without a menu lookup.
+    modifiers: Array.isArray(line?.modifiers) ? line.modifiers : [],
+    // Day-part attribution (M2 · PR 13): null when no window was active at
+    // pricing time, so a KOT / receipt / KDS ticket that predates this
+    // field renders exactly as before.
+    day_part_id: line?.day_part_id || null,
+    day_part_label: line?.day_part_label || null
   };
 }
 

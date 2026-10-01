@@ -15,9 +15,11 @@ import { syncQueue } from './lib/syncQueue.js';
 import { authenticateHubStaff } from './lib/supabaseClient.js';
 import { restaurantCache } from './lib/restaurantCache.js';
 import { priceOrder } from './lib/pricing.js';
+import { resolveEffectivePrice } from './lib/dayParts.js';
 import { buildInvoicePreview } from './lib/invoice.js';
 import { invoiceStore } from './lib/invoiceStore.js';
 import { renderKot, renderReceipt, sendToPrinter } from './lib/printer.js';
+import { groupTicketByStation } from './lib/kotRouting.js';
 import { waiterStore } from './lib/waiterStore.js';
 import { crashReporter, attachHubProcessHandlers } from './lib/crashReporter.js';
 
@@ -322,13 +324,29 @@ app.post('/orders', requireDevice, (req, res) => {
 async function autoPrintKot(ticket, pairing) {
   const printers = hubConfig.getPrinters('kot');
   if (printers.length === 0) return; // No KOT printer configured — silent no-op.
-  const job = renderKot(ticket, pairing);
-  for (const p of printers) {
-    const res = await sendToPrinter(job, { host: p.host, port: p.port });
-    if (res.ok) {
-      console.log(`🖨  KOT ${ticket.table_name || 'Table'} · #${ticket.ticket_number} → ${p.id} (${res.sent_bytes ?? 0} bytes)`);
-    } else {
-      console.warn(`🖨  KOT print failed on ${p.id}: ${res.error} [${res.code}]`);
+  // Split by station (M2 · PR 15). A ticket with items across hot / cold /
+  // bar produces multiple KOTs, one per station, each carrying only its
+  // own items. A printer with a `station` field prints only jobs for that
+  // station; a printer with no station prints ALL jobs (fallback for
+  // single-printer deployments so nothing regresses).
+  //
+  // When the ticket resolves to a single station (the common case), no
+  // station label is added to the header — a T5 order of curries prints
+  // "KITCHEN ORDER TICKET" exactly as before PR 15. Once a split happens,
+  // every KOT in the split carries its station in the header so the cook
+  // can eyeball which one is theirs.
+  const groups = groupTicketByStation(ticket);
+  const shouldLabel = groups.length > 1;
+  for (const g of groups) {
+    const job = renderKot(g.ticket, pairing, shouldLabel ? { station_label: g.label } : {});
+    for (const p of printers) {
+      if (p.station && p.station !== g.station) continue;
+      const res = await sendToPrinter(job, { host: p.host, port: p.port });
+      if (res.ok) {
+        console.log(`🖨  KOT ${ticket.table_name || 'Table'} · #${ticket.ticket_number} [${g.station}] → ${p.id} (${res.sent_bytes ?? 0} bytes)`);
+      } else {
+        console.warn(`🖨  KOT print failed on ${p.id} [${g.station}]: ${res.error} [${res.code}]`);
+      }
     }
   }
 }
@@ -380,6 +398,40 @@ app.post('/orders/:id/ready', requireDevice, (req, res) => {
 app.get('/menu', requireDevice, (req, res) => {
   const pairing = hubConfig.getPairingInfo();
   const menuData = restaurantCache.getMenuCache(pairing.restaurant_id);
+  // Day-part enrichment (M2 · PR 13). We resolve the active window on every
+  // request so the handset gets the currently-effective price without having
+  // to duplicate the day-part logic client-side, and so the cart total the
+  // waiter sees matches what the hub bills at POST /orders — modulo up to
+  // one poll interval (~5s) of drift, which the server-authoritative
+  // re-pricing at order time closes anyway.
+  if (menuData && !menuData.uninitialized && Array.isArray(menuData.items)) {
+    const now = new Date();
+    menuData.items = menuData.items.map(i => {
+      const dayParts = Array.isArray(i.day_parts) ? i.day_parts : [];
+      const baseEff = resolveEffectivePrice(i, null, now);
+      const nextVariants = Array.isArray(i.variants)
+        ? i.variants.map(v => {
+            const ve = resolveEffectivePrice(i, v, now);
+            return {
+              ...v,
+              effective_price: ve.price,
+              active_day_part: ve.day_part_id
+                ? { id: ve.day_part_id, label: ve.day_part_label }
+                : null
+            };
+          })
+        : undefined;
+      return {
+        ...i,
+        effective_price: baseEff.price,
+        active_day_part: baseEff.day_part_id
+          ? { id: baseEff.day_part_id, label: baseEff.day_part_label }
+          : null,
+        ...(nextVariants ? { variants: nextVariants } : {}),
+        ...(dayParts.length > 0 ? { day_parts: dayParts } : {})
+      };
+    });
+  }
   res.json(menuData);
 });
 
@@ -621,19 +673,37 @@ app.post('/orders/:id/print-kot', requireDevice, async (req, res) => {
   );
   if (!ticket) return res.status(404).json({ success: false, error: 'Ticket not found.', code: 'NOT_FOUND' });
 
-  const job = renderKot(ticket, pairing);
+  // Reprint mirrors the auto-print split (M2 · PR 15) — one KOT per
+  // station, so a reprint after paper-out on the bar printer only re-
+  // fires the bar-station lines, not the whole hot-line ticket.
+  const groups = groupTicketByStation(ticket);
   const printers = hubConfig.getPrinters('kot');
   const results = [];
-  if (printers.length === 0) {
+  const previewTexts = [];
+  if (groups.length === 0) {
+    // Legacy safety: never-empty ticket somehow arrived here. Fall back
+    // to the pre-PR-15 behaviour so nothing regresses.
+    const job = renderKot(ticket, pairing);
+    previewTexts.push(job.preview_text);
     results.push({ printer_id: 'preview', ok: true, preview: true });
   } else {
-    for (const p of printers) {
-      const r = await sendToPrinter(job, { host: p.host, port: p.port });
-      results.push({ printer_id: p.id, ...r });
+    const shouldLabel = groups.length > 1;
+    for (const g of groups) {
+      const job = renderKot(g.ticket, pairing, shouldLabel ? { station_label: g.label } : {});
+      previewTexts.push(job.preview_text);
+      if (printers.length === 0) {
+        results.push({ printer_id: 'preview', station: g.station, ok: true, preview: true });
+      } else {
+        for (const p of printers) {
+          if (p.station && p.station !== g.station) continue;
+          const r = await sendToPrinter(job, { host: p.host, port: p.port });
+          results.push({ printer_id: p.id, station: g.station, ...r });
+        }
+      }
     }
   }
-  console.log(`🖨  KOT reprint #${ticket.ticket_number} → ${results.map(r => `${r.printer_id}:${r.ok ? 'ok' : r.code}`).join(', ')}`);
-  res.json({ success: true, ticket_id: ticket.id, results, preview_text: job.preview_text });
+  console.log(`🖨  KOT reprint #${ticket.ticket_number} → ${results.map(r => `${r.printer_id}[${r.station || '*'}]:${r.ok ? 'ok' : r.code}`).join(', ')}`);
+  res.json({ success: true, ticket_id: ticket.id, results, preview_text: previewTexts.join('\n') });
 });
 
 // 7d-4. POST /invoices/:id/print-receipt — Customer receipt for the reception printer

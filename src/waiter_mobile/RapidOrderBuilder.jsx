@@ -1,25 +1,88 @@
 import React, { useState } from 'react';
 import { usePos } from '../context/PosContext';
-import { Search, Plus, Minus, AlertTriangle } from 'lucide-react';
+import { Search, Plus, Minus, AlertTriangle, SlidersHorizontal, Clock } from 'lucide-react';
 import { VegBadge } from '../components/VegBadge';
 import { Badge } from '../components/ui/badge';
+import { ModifierSheet } from './ModifierSheet';
 
 export const RapidOrderBuilder = ({ selectedTableId, draftItems, onAddItem, onRemoveItem }) => {
   const { menu, tables, currentRestaurant } = usePos();
   const [activeCategory, setActiveCategory] = useState('All');
   const [query, setQuery] = useState('');
   const [vegFilter, setVegFilter] = useState('all');
+  // The row currently being customized in the modifier sheet, or null if
+  // the sheet is closed. Holds a resolved row (variant already picked) so
+  // the sheet only handles modifier picks on top.
+  const [sheetRow, setSheetRow] = useState(null);
 
   const currency = currentRestaurant?.currency || '₹';
   const table = tables.find(t => t.id === selectedTableId);
   const categories = ['All', ...new Set(menu.map(m => m.category))];
 
-  const filtered = menu.filter(item => {
-    if (!item.available) return false;
-    if (activeCategory !== 'All' && item.category !== activeCategory) return false;
-    if (vegFilter === 'veg' && !item.isVeg) return false;
-    if (vegFilter === 'nonveg' && item.isVeg) return false;
-    if (query.trim() && !item.name.toLowerCase().includes(query.toLowerCase())) return false;
+  // Expand items with variants into one visible row per variant. Each row
+  // carries a stable `lineKey` and the resolved shape addItem() expects.
+  // No-variant items render as a single row with `lineKey === item.id`.
+  // Modifier groups (M2 · PR 12) hang off the parent item, not the variant,
+  // so both flat-item rows and variant-expanded rows inherit the same
+  // modifier_groups reference; the sheet handles the picks.
+  // The hub already resolves the active day-part per request and stamps
+  // `effective_price` + `active_day_part` on each item + variant (M2 · PR 13).
+  // The handset just reads those fields — no client-side clock, no drift
+  // window between what the waiter taps and what the KDS bills. Server is
+  // the pricing authority; POST /orders re-prices from scratch anyway.
+  const priceOf = (obj) => Number.isFinite(Number(obj?.effective_price))
+    ? Number(obj.effective_price)
+    : Number(obj?.price) || 0;
+
+  const expandedRows = menu.flatMap(item => {
+    if (!item.available) return [];
+    const hasModifiers = Array.isArray(item.modifier_groups) && item.modifier_groups.length > 0;
+    const itemDayPart = item.active_day_part || null;
+    if (Array.isArray(item.variants) && item.variants.length > 0) {
+      return item.variants.map(v => ({
+        lineKey: `${item.id}|${v.id}`,
+        item_id: item.id,
+        variant_id: v.id,
+        variant_label: v.label,
+        name: item.name,
+        display_name: `${item.name} — ${v.label}`,
+        price: priceOf(v),
+        base_price: Number(v.price) || 0,
+        active_day_part: v.active_day_part || itemDayPart,
+        isVeg: item.isVeg,
+        category: item.category,
+        hasModifiers,
+        modifier_groups: hasModifiers ? item.modifier_groups : null,
+        // Per-variant availability (M2 · PR 14): a variant marked
+        // `available: false` on the menu keeps its row visible but
+        // disabled with an 86'd chip, so reception sees WHY the size
+        // they wanted isn't takeable tonight.
+        available: v.available !== false
+      }));
+    }
+    return [{
+      lineKey: String(item.id),
+      item_id: item.id,
+      variant_id: null,
+      variant_label: null,
+      name: item.name,
+      display_name: item.name,
+      price: priceOf(item),
+      base_price: Number(item.price) || 0,
+      active_day_part: itemDayPart,
+      isVeg: item.isVeg,
+      category: item.category,
+      hasModifiers,
+      modifier_groups: hasModifiers ? item.modifier_groups : null,
+      available: true
+    }];
+  });
+
+  const filtered = expandedRows.filter(row => {
+    if (activeCategory !== 'All' && row.category !== activeCategory) return false;
+    if (vegFilter === 'veg' && !row.isVeg) return false;
+    if (vegFilter === 'nonveg' && row.isVeg) return false;
+    if (query.trim() && !row.display_name.toLowerCase().includes(query.toLowerCase())) return false;
     return true;
   });
 
@@ -79,50 +142,147 @@ export const RapidOrderBuilder = ({ selectedTableId, draftItems, onAddItem, onRe
             No items match your search.
           </div>
         ) : null}
-
-        {filtered.map(item => {
-          const qty = draftItems[item.id] || 0;
+        {filtered.map(row => {
+          // Aggregate qty across every draft line whose lineKey starts with
+          // this row's key — a modifier'd item may have multiple cart lines
+          // (Hot vs Mild vs +Cheese) all sharing this menu row. The bare "-"
+          // stepper only decrements the plain, no-modifier variant; modifier
+          // combos are edited from the cart tab (each has its own line there).
+          const rowKey = row.lineKey;
+          const draftEntries = Object.entries(draftItems).filter(([k]) => k === rowKey || k.startsWith(`${rowKey}|`));
+          const qty = draftEntries.reduce((s, [, v]) => s + (v?.qty || 0), 0);
+          const plainQty = draftItems[rowKey]?.qty || 0;
+          const openSheet = () => setSheetRow(row);
+          const handleAdd = row.hasModifiers ? openSheet : () => onAddItem(row);
+          const isEightySixd = row.available === false;
           return (
-            <div key={item.id}
-              className="flex items-center justify-between rounded-[var(--radius-md)] border px-3.5 py-2.5 transition-all"
+            <div
+              key={row.lineKey}
               style={{
-                background: qty > 0 ? 'var(--status-amber-bg)' : 'var(--color-canvas)',
-                borderColor: qty > 0 ? 'var(--status-amber-border)' : 'var(--color-hairline)',
-              }}>
-              <div className="flex items-center gap-2.5 flex-1 min-w-0">
-                <VegBadge isVeg={item.isVeg} size={8} />
-                <div className="min-w-0">
-                  <div className="typography-title-md truncate" style={{ color: 'var(--color-ink)' }}>{item.name}</div>
-                  <div className="typography-body-sm text-xs mt-[1px]" style={{ color: 'var(--color-muted)' }}>
-                    {currency}{item.price}
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                background: isEightySixd
+                  ? 'var(--color-surface-soft)'
+                  : (qty > 0 ? 'var(--status-amber-bg)' : 'var(--color-canvas)'),
+                border: `1px solid ${qty > 0 ? 'var(--status-amber-border)' : 'var(--color-hairline)'}`,
+                borderRadius: 'var(--radius-md)', padding: '10px 14px',
+                boxShadow: 'var(--shadow-flat)',
+                opacity: isEightySixd ? 0.55 : 1,
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
+                <VegBadge isVeg={row.isVeg} size={8} />
+                <div style={{ minWidth: 0 }}>
+                  <div className="typography-title-md" style={{ color: 'var(--color-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {row.name}
+                    {row.variant_label && (
+                      <span style={{ fontSize: '11px', color: 'var(--color-muted)', fontWeight: 500, marginLeft: 6 }}>
+                        · {row.variant_label}
+                      </span>
+                    )}
+                    {row.hasModifiers && (
+                      <span title="Customizable — spice, extras, prep" style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 3, marginLeft: 6,
+                        fontSize: '9px', color: 'var(--color-primary)', fontFamily: 'var(--font-mono)',
+                        background: 'var(--status-amber-bg)',
+                        padding: '1px 5px', borderRadius: 'var(--radius-full)',
+                        border: '1px solid var(--status-amber-border)', verticalAlign: 'middle'
+                      }}>
+                        <SlidersHorizontal size={9} /> CUSTOMIZE
+                      </span>
+                    )}
+                    {row.active_day_part && !isEightySixd && (
+                      <span
+                        title={`Active promotion: ${row.active_day_part.label}`}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 3, marginLeft: 6,
+                          fontSize: '9px', color: 'var(--status-green-text)', fontFamily: 'var(--font-mono)',
+                          background: 'var(--status-green-bg)',
+                          padding: '1px 5px', borderRadius: 'var(--radius-full)',
+                          border: '1px solid var(--status-green-border)', verticalAlign: 'middle'
+                        }}
+                      >
+                        <Clock size={9} /> {String(row.active_day_part.label).toUpperCase()}
+                      </span>
+                    )}
+                    {isEightySixd && (
+                      <span
+                        title="86'd — currently unavailable"
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 3, marginLeft: 6,
+                          fontSize: '9px', color: 'var(--status-rust-text)', fontFamily: 'var(--font-mono)',
+                          background: 'var(--status-rust-bg)',
+                          padding: '1px 5px', borderRadius: 'var(--radius-full)',
+                          border: '1px solid var(--status-rust-border)', verticalAlign: 'middle',
+                          fontWeight: 700
+                        }}
+                      >
+                        86'D
+                      </span>
+                    )}
+                  </div>
+                  <div className="typography-body-sm" style={{ fontSize: '12px', color: 'var(--color-muted)', marginTop: '1px', display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                    <span style={{ color: row.active_day_part ? 'var(--status-green-text)' : 'var(--color-muted)', fontWeight: row.active_day_part ? 700 : 500 }}>
+                      {currency}{row.price}{row.hasModifiers ? ' +' : ''}
+                    </span>
+                    {row.active_day_part && row.base_price !== row.price && (
+                      <span style={{ textDecoration: 'line-through', fontSize: 11, opacity: 0.6 }}>
+                        {currency}{row.base_price}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
 
-              <div className="flex items-center gap-1.5 shrink-0">
-                {qty > 0 ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                {isEightySixd ? (
+                  <span style={{
+                    padding: '6px 12px', fontSize: '11px', fontWeight: 600,
+                    color: 'var(--status-rust-text)', fontFamily: 'var(--font-mono)'
+                  }}>
+                    Unavailable
+                  </span>
+                ) : qty > 0 ? (
                   <>
-                    <button onClick={() => onRemoveItem(item.id)} disabled={!selectedTableId}
-                      className="w-7 h-7 rounded-[var(--radius-sm)] border flex items-center justify-center cursor-pointer"
-                      style={{ background: 'var(--color-surface-soft)', borderColor: 'var(--color-hairline)', color: 'var(--color-ink)' }}>
-                      <Minus size={13} />
-                    </button>
-                    <span className="font-mono text-[13px] font-bold min-w-[18px] text-center" style={{ color: 'var(--color-primary)' }}>{qty}</span>
-                    <button onClick={() => onAddItem(item.id)} disabled={!selectedTableId}
-                      className="w-7 h-7 rounded-[var(--radius-sm)] border-none flex items-center justify-center cursor-pointer font-bold"
-                      style={{ background: 'var(--color-primary)', color: 'var(--color-on-primary)' }}>
-                      <Plus size={13} />
-                    </button>
+                    <button
+                      // Only touch the plain (no-modifier) draft line here;
+                      // modifier lines are edited from the cart tab where
+                      // each combination is listed individually.
+                      onClick={() => onRemoveItem(rowKey)}
+                      disabled={!selectedTableId || plainQty === 0}
+                      title={plainQty === 0 ? 'Edit customized items from the Cart tab' : 'Remove one'}
+                      style={{
+                        width: '28px', height: '28px', borderRadius: 'var(--radius-sm)',
+                        background: 'var(--color-surface-soft)', border: '1px solid var(--color-hairline)',
+                        color: 'var(--color-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        cursor: plainQty === 0 ? 'not-allowed' : 'pointer',
+                        opacity: plainQty === 0 ? 0.4 : 1
+                      }}
+                    ><Minus size={13} /></button>
+
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', fontWeight: 700, color: 'var(--color-primary)', minWidth: '18px', textAlign: 'center' }}>
+                      {qty}
+                    </span>
+
+                    <button
+                      onClick={handleAdd} disabled={!selectedTableId}
+                      style={{
+                        width: '28px', height: '28px', borderRadius: 'var(--radius-sm)',
+                        background: 'var(--color-primary)', color: '#ffffff', border: 'none',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700,
+                        cursor: 'pointer'
+                      }}
+                    ><Plus size={13} /></button>
                   </>
                 ) : (
-                  <button onClick={() => onAddItem(item.id)} disabled={!selectedTableId}
+                  <button onClick={handleAdd} disabled={!selectedTableId}
                     className="px-3.5 py-1.5 rounded-[var(--radius-sm)] text-xs font-medium border-none flex items-center gap-1 cursor-pointer transition-all"
                     style={{
                       background: selectedTableId ? 'var(--color-primary)' : 'var(--color-surface-soft)',
                       color: selectedTableId ? 'var(--color-on-primary)' : 'var(--color-muted)',
                       cursor: selectedTableId ? 'pointer' : 'not-allowed',
                     }}>
-                    <Plus size={13} />Add
+                    <Plus size={13} />{row.hasModifiers ? 'Customize' : 'Add'}
                   </button>
                 )}
               </div>
@@ -130,6 +290,18 @@ export const RapidOrderBuilder = ({ selectedTableId, draftItems, onAddItem, onRe
           );
         })}
       </div>
+
+      {sheetRow && (
+        <ModifierSheet
+          row={sheetRow}
+          currency={currency}
+          onClose={() => setSheetRow(null)}
+          onConfirm={(configuredRow) => {
+            onAddItem(configuredRow);
+            setSheetRow(null);
+          }}
+        />
+      )}
     </div>
   );
 };
