@@ -10,6 +10,21 @@ const DATA_DIR = process.env.HUB_DATA_DIR || path.join(__dirname, '..', 'data');
 
 const MENU_CACHE_FILE = path.join(DATA_DIR, 'menu_cache.json');
 const TABLES_CACHE_FILE = path.join(DATA_DIR, 'tables_cache.json');
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+const MAX_BACKUPS = 10;
+const CATALOG_FILES = { menu: MENU_CACHE_FILE, tables: TABLES_CACHE_FILE };
+
+const failure = (status, code, error, extra = {}) => ({ ok: false, status, code, error, ...extra });
+
+// Section order is the order of first appearance when no explicit list is stored
+// (legacy caches written by the cloud pull).
+function deriveSections(tables) {
+  const seen = [];
+  for (const t of tables || []) {
+    if (t.section && !seen.includes(t.section)) seen.push(t.section);
+  }
+  return seen;
+}
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -150,6 +165,8 @@ class RestaurantCache {
     this.tablesCache = null;
     this.isUninitialized = false;
     this.realtimeChannel = null;
+    this._writeChain = Promise.resolve();
+    this._backupSeq = 0;
   }
 
   loadFromDisk() {
@@ -200,6 +217,78 @@ class RestaurantCache {
     } catch (err) {
       console.error('❌ Failed to save tables_cache.json:', err);
       return false;
+    }
+  }
+
+  /**
+   * Once a catalog has been edited on the hub (revision > 0) it is authoritative:
+   * boot sync, reconnect and realtime events must not overwrite it.
+   */
+  isHubAuthoritative(kind) {
+    const cache = kind === 'menu' ? this.menuCache : this.tablesCache;
+    return (cache?.revision || 0) > 0;
+  }
+
+  /**
+   * The only supported way to change the menu or tables from the hub. Calls are
+   * serialised through one promise chain so read-modify-write cannot interleave.
+   * `mutator` receives a deep copy of the current catalog and returns
+   * `{ ok:true, data, meta? }` or `{ ok:false, status, code, error, … }`.
+   */
+  updateCatalog(kind, baseRevision, mutator) {
+    const run = this._writeChain.then(() => this._applyCatalogUpdate(kind, baseRevision, mutator));
+    this._writeChain = run.catch(() => {});
+    return run;
+  }
+
+  async _applyCatalogUpdate(kind, baseRevision, mutator) {
+    const current = kind === 'menu' ? this.getMenuCache() : this.getTablesCache();
+    if (current.uninitialized) {
+      return failure(409, 'HUB_UNINITIALIZED', 'No catalog yet — connect this hub to the internet once to complete setup.');
+    }
+    if (!Number.isInteger(baseRevision)) {
+      return failure(400, 'BASE_REVISION_REQUIRED', 'base_revision (the revision you loaded) is required.');
+    }
+    if (baseRevision !== current.revision) {
+      return failure(409, 'STALE_REVISION', 'This changed since you loaded it. Reload and try again.', { current_revision: current.revision });
+    }
+
+    let result;
+    try {
+      result = mutator(structuredClone(current));
+    } catch (err) {
+      return failure(500, 'MUTATION_FAILED', err.message);
+    }
+    if (!result.ok) return result;
+
+    const next = { ...result.data, revision: current.revision + 1, source: 'hub', uninitialized: false };
+    const file = CATALOG_FILES[kind];
+    try {
+      await this._backupFile(file);
+      const tmp = `${file}.tmp`;
+      await fs.promises.writeFile(tmp, JSON.stringify(next, null, 2), 'utf-8');
+      await fs.promises.rename(tmp, file);
+    } catch (err) {
+      console.error(`❌ Failed to write ${path.basename(file)}:`, err);
+      return failure(500, 'WRITE_FAILED', 'Could not save to disk. Nothing was changed.');
+    }
+
+    // Swap the in-memory copy only after the file is safely on disk.
+    if (kind === 'menu') this.menuCache = next; else this.tablesCache = next;
+    return { ok: true, data: next, ...(result.meta ? { meta: result.meta } : {}) };
+  }
+
+  async _backupFile(file) {
+    if (!fs.existsSync(file)) return;
+    await fs.promises.mkdir(BACKUP_DIR, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const seq = String(++this._backupSeq).padStart(4, '0');
+    const prefix = path.basename(file, '.json');
+    await fs.promises.copyFile(file, path.join(BACKUP_DIR, `${prefix}.${stamp}-${seq}.json`));
+
+    const mine = (await fs.promises.readdir(BACKUP_DIR)).filter(f => f.startsWith(`${prefix}.`)).sort();
+    for (const old of mine.slice(0, Math.max(0, mine.length - MAX_BACKUPS))) {
+      await fs.promises.unlink(path.join(BACKUP_DIR, old));
     }
   }
 
@@ -291,8 +380,8 @@ class RestaurantCache {
 
     if (isOnline) {
       console.log('🌐 Hub is ONLINE at boot. Synchronizing menu & table layout snapshot from Supabase...');
-      const freshMenu = await this.fetchMenuFromSupabase(restaurantId);
-      const freshTables = await this.fetchTablesFromSupabase(restaurantId);
+      const freshMenu = this.isHubAuthoritative('menu') ? null : await this.fetchMenuFromSupabase(restaurantId);
+      const freshTables = this.isHubAuthoritative('tables') ? null : await this.fetchTablesFromSupabase(restaurantId);
 
       if (freshMenu) {
         await this.saveMenuToDisk(freshMenu);
@@ -326,6 +415,7 @@ class RestaurantCache {
     try {
       this.realtimeChannel = supabase.channel(`hub-cache-${restaurantId}`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_items' }, async () => {
+          if (this.isHubAuthoritative('menu')) return;
           console.log('🔔 Supabase Realtime: menu_items change detected! Refreshing local cache & broadcasting live...');
           const fresh = await this.fetchMenuFromSupabase(restaurantId);
           if (fresh) {
@@ -334,6 +424,7 @@ class RestaurantCache {
           }
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_categories' }, async () => {
+          if (this.isHubAuthoritative('menu')) return;
           console.log('🔔 Supabase Realtime: menu_categories change detected! Refreshing local cache & broadcasting live...');
           const fresh = await this.fetchMenuFromSupabase(restaurantId);
           if (fresh) {
@@ -342,6 +433,7 @@ class RestaurantCache {
           }
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'tables' }, async () => {
+          if (this.isHubAuthoritative('tables')) return;
           console.log('🔔 Supabase Realtime: tables change detected! Refreshing local cache & broadcasting live...');
           const fresh = await this.fetchTablesFromSupabase(restaurantId);
           if (fresh) {
@@ -360,8 +452,8 @@ class RestaurantCache {
   async handleReconnection(restaurantId, broadcastFn) {
     console.log(`🌐 Hub reconnected online! Fetching latest menu & table snapshot from Supabase...`);
     try {
-      const freshMenu = await this.fetchMenuFromSupabase(restaurantId);
-      const freshTables = await this.fetchTablesFromSupabase(restaurantId);
+      const freshMenu = this.isHubAuthoritative('menu') ? null : await this.fetchMenuFromSupabase(restaurantId);
+      const freshTables = this.isHubAuthoritative('tables') ? null : await this.fetchTablesFromSupabase(restaurantId);
 
       if (freshMenu) {
         await this.saveMenuToDisk(freshMenu);
@@ -388,12 +480,14 @@ class RestaurantCache {
         error: 'NO_CACHE_AND_OFFLINE',
         message: 'No menu data available — connect this hub to the internet once to complete setup.',
         restaurant_id: restaurantId,
+        revision: 0,
         categories: [],
         items: []
       };
     }
     return {
       ...this.menuCache,
+      revision: this.menuCache.revision || 0,
       uninitialized: false
     };
   }
@@ -405,12 +499,16 @@ class RestaurantCache {
         error: 'NO_CACHE_AND_OFFLINE',
         message: 'No menu data available — connect this hub to the internet once to complete setup.',
         restaurant_id: restaurantId,
+        revision: 0,
         count: 0,
+        sections: [],
         tables: []
       };
     }
     return {
       ...this.tablesCache,
+      revision: this.tablesCache.revision || 0,
+      sections: this.tablesCache.sections || deriveSections(this.tablesCache.tables),
       uninitialized: false
     };
   }

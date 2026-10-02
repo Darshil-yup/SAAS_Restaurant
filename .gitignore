@@ -34,3 +34,6 @@ hub_server/data/crash_log.json
 hub_server/data/menu_cache.json
 hub_server/data/tables_cache.json
 hub_server/data/invoices/
+
+# Rolling safety backups the hub writes before every menu/table edit
+hub_server/data/backups/
