@@ -18,6 +18,9 @@ export function applyLayout(current, input, openTableIds = new Set()) {
   }
   const errors = [];
 
+  // Normalize openTableIds early: convert to Set of string ids, handle null/undefined/array/Set
+  const open = new Set([...(openTableIds ?? [])].map(String));
+
   const sections = [];
   input.sections.forEach((s, i) => {
     const name = typeof s === 'string' ? s.trim() : '';
@@ -60,12 +63,17 @@ export function applyLayout(current, input, openTableIds = new Set()) {
 
     let id;
     if (t?.id !== undefined && t?.id !== null) {
-      const existing = existingById.get(String(t.id));
-      if (!existing) errors.push({ field: at('id'), message: `unknown table id ${t.id}` });
-      else if (usedIds.has(String(existing.id))) errors.push({ field: at('id'), message: `table id ${t.id} appears twice` });
-      else {
-        id = existing.id;
-        usedIds.add(String(existing.id));
+      // Type guard: reject id if not typeof 'number' or 'string' before calling String()
+      if (typeof t.id !== 'number' && typeof t.id !== 'string') {
+        errors.push({ field: at('id'), message: 'table id must be a number or a string' });
+      } else {
+        const existing = existingById.get(String(t.id));
+        if (!existing) errors.push({ field: at('id'), message: `unknown table id ${t.id}` });
+        else if (usedIds.has(String(existing.id))) errors.push({ field: at('id'), message: `table id ${t.id} appears twice` });
+        else {
+          id = existing.id;
+          usedIds.add(String(existing.id));
+        }
       }
     }
     return { id, name, section, capacity: t?.capacity };
@@ -76,10 +84,10 @@ export function applyLayout(current, input, openTableIds = new Set()) {
   // deleting a table mid-service would orphan or misattribute its bill.
   const blocked = [];
   for (const t of current.tables) {
-    if (!openTableIds.has(String(t.id))) continue;
+    if (!open.has(String(t.id))) continue;
     const next = rows.find(r => r.id !== undefined && String(r.id) === String(t.id));
     if (!next) blocked.push({ id: t.id, name: t.name, action: 'delete' });
-    else if (next.name !== t.name) blocked.push({ id: t.id, name: t.name, action: 'rename' });
+    else if (next.name !== String(t.name).trim()) blocked.push({ id: t.id, name: t.name, action: 'rename' });
   }
   if (blocked.length) {
     const names = blocked.map(b => `${b.name} (${b.action})`).join(', ');

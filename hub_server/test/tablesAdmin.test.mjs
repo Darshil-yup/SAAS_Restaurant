@@ -177,3 +177,234 @@ test('next_id counter is respected when higher than max(existing ids) + 1', () =
   assert.equal(r.data.tables[1].id, 10);
   assert.equal(r.data.next_id, 11);
 });
+
+// Fix round 1: boundary and type guard tests
+test('table name limit: 50 chars accepted, 51 rejected', () => {
+  const name50 = 'a'.repeat(50);
+  const name51 = 'a'.repeat(51);
+  const r50 = applyLayout(current(), {
+    sections: ['Main Hall'],
+    tables: [{ id: 1, name: name50, section: 'Main Hall', capacity: 2 }]
+  });
+  assert.equal(r50.ok, true, '50-char name accepted');
+
+  const r51 = applyLayout(current(), {
+    sections: ['Main Hall'],
+    tables: [{ id: 1, name: name51, section: 'Main Hall', capacity: 2 }]
+  });
+  assert.equal(r51.ok, false, '51-char name rejected');
+  assert.equal(r51.status, 400);
+  assert.equal(r51.code, 'INVALID_LAYOUT');
+  assert.equal(r51.errors[0].field, 'tables[0].name');
+});
+
+test('section limit: 60 chars accepted, 61 rejected', () => {
+  const sec60 = 'a'.repeat(60);
+  const sec61 = 'a'.repeat(61);
+  const r60 = applyLayout(current(), {
+    sections: [sec60],
+    tables: [{ id: 1, name: 'T1', section: sec60, capacity: 2 }]
+  });
+  assert.equal(r60.ok, true, '60-char section accepted');
+
+  const r61 = applyLayout(current(), {
+    sections: [sec61],
+    tables: [{ id: 1, name: 'T1', section: sec61, capacity: 2 }]
+  });
+  assert.equal(r61.ok, false, '61-char section rejected');
+  assert.equal(r61.status, 400);
+  assert.equal(r61.code, 'INVALID_LAYOUT');
+  assert.equal(r61.errors[0].field, 'sections[0]');
+});
+
+test('capacity boundary: 1 and 50 accepted, 0 and 51 rejected', () => {
+  const r1 = applyLayout(current(), {
+    sections: ['Main Hall'],
+    tables: [{ id: 1, name: 'T1', section: 'Main Hall', capacity: 1 }]
+  });
+  assert.equal(r1.ok, true, 'capacity 1 accepted');
+
+  const r50 = applyLayout(current(), {
+    sections: ['Main Hall'],
+    tables: [{ id: 1, name: 'T1', section: 'Main Hall', capacity: 50 }]
+  });
+  assert.equal(r50.ok, true, 'capacity 50 accepted');
+
+  const r0 = applyLayout(current(), {
+    sections: ['Main Hall'],
+    tables: [{ id: 1, name: 'T1', section: 'Main Hall', capacity: 0 }]
+  });
+  assert.equal(r0.ok, false);
+  assert.equal(r0.status, 400);
+  assert.equal(r0.code, 'INVALID_LAYOUT');
+  assert.equal(r0.errors[0].field, 'tables[0].capacity');
+
+  const r51 = applyLayout(current(), {
+    sections: ['Main Hall'],
+    tables: [{ id: 1, name: 'T1', section: 'Main Hall', capacity: 51 }]
+  });
+  assert.equal(r51.ok, false);
+  assert.equal(r51.status, 400);
+  assert.equal(r51.code, 'INVALID_LAYOUT');
+  assert.equal(r51.errors[0].field, 'tables[0].capacity');
+});
+
+test('type guards reject non-string/number capacity, name, and section', () => {
+  const run = (sections, tables) => applyLayout(current(), { sections, tables });
+
+  const capStr = run(['Main Hall'], [{ id: 1, name: 'T1', section: 'Main Hall', capacity: '4' }]);
+  assert.equal(capStr.ok, false);
+  assert.equal(capStr.status, 400);
+  assert.equal(capStr.code, 'INVALID_LAYOUT');
+  assert.equal(capStr.errors[0].field, 'tables[0].capacity');
+
+  const nameNum = run(['Main Hall'], [{ id: 1, name: 5, section: 'Main Hall', capacity: 2 }]);
+  assert.equal(nameNum.ok, false);
+  assert.equal(nameNum.status, 400);
+  assert.equal(nameNum.code, 'INVALID_LAYOUT');
+  assert.equal(nameNum.errors[0].field, 'tables[0].name');
+
+  const sectNum = run(['Main Hall'], [{ id: 1, name: 'T1', section: 5, capacity: 2 }]);
+  assert.equal(sectNum.ok, false);
+  assert.equal(sectNum.status, 400);
+  assert.equal(sectNum.code, 'INVALID_LAYOUT');
+  assert.equal(sectNum.errors[0].field, 'tables[0].section');
+});
+
+test('sections array type guard: reject non-string section names', () => {
+  const run = (sections) => applyLayout(current(), { sections, tables: [] });
+
+  const numSect = run([5]);
+  assert.equal(numSect.ok, false);
+  assert.equal(numSect.status, 400);
+  assert.equal(numSect.code, 'INVALID_LAYOUT');
+  assert.equal(numSect.errors[0].field, 'sections[0]');
+
+  const objSect = run([{}]);
+  assert.equal(objSect.ok, false);
+  assert.equal(objSect.status, 400);
+  assert.equal(objSect.code, 'INVALID_LAYOUT');
+  assert.equal(objSect.errors[0].field, 'sections[0]');
+});
+
+test('id type guard: reject non-number/string ids, accept numeric strings', () => {
+  const run = (tables) => applyLayout(current(), { sections: ['Main Hall'], tables });
+
+  // Reject object id with bad toString
+  const objId = run([{ id: { toString: 1 }, name: 'T', section: 'Main Hall', capacity: 2 }]);
+  assert.equal(objId.ok, false);
+  assert.equal(objId.status, 400);
+  assert.equal(objId.code, 'INVALID_LAYOUT');
+  assert.equal(objId.errors[0].field, 'tables[0].id');
+
+  // Reject array id
+  const arrId = run([{ id: [1], name: 'T', section: 'Main Hall', capacity: 2 }]);
+  assert.equal(arrId.ok, false);
+  assert.equal(arrId.status, 400);
+  assert.equal(arrId.code, 'INVALID_LAYOUT');
+  assert.equal(arrId.errors[0].field, 'tables[0].id');
+
+  // Accept numeric string id
+  const strId = run([{ id: '1', name: 'T', section: 'Main Hall', capacity: 2 }]);
+  assert.equal(strId.ok, true);
+});
+
+test('id type guard: JSON.parse hostile cases do not throw', () => {
+  const hostile = JSON.parse('{"id":{"toString":1},"name":"T","section":"Main Hall","capacity":2}');
+  const r = applyLayout(current(), { sections: ['Main Hall'], tables: [hostile] });
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 400);
+  assert.equal(r.code, 'INVALID_LAYOUT');
+  assert.equal(r.errors[0].field, 'tables[0].id');
+});
+
+test('open-bill lock works with numeric Set, array, null, and undefined', () => {
+  const open1 = new Set([1]); // numeric Set
+  const r1 = applyLayout(current(), {
+    sections: ['Main Hall'],
+    tables: [{ id: 1, name: 'Changed', section: 'Main Hall', capacity: 2 }]
+  }, open1);
+  assert.equal(r1.ok, false);
+  assert.equal(r1.status, 409);
+  assert.equal(r1.code, 'TABLE_HAS_OPEN_BILL');
+
+  // Array should work like iterable
+  const r2 = applyLayout(current(), {
+    sections: ['Main Hall'],
+    tables: [{ id: 1, name: 'Changed', section: 'Main Hall', capacity: 2 }]
+  }, [1]);
+  assert.equal(r2.ok, false);
+  assert.equal(r2.status, 409);
+  assert.equal(r2.code, 'TABLE_HAS_OPEN_BILL');
+
+  // null should not throw
+  const r3 = applyLayout(current(), {
+    sections: ['Main Hall'],
+    tables: [{ id: 1, name: 'Changed', section: 'Main Hall', capacity: 2 }]
+  }, null);
+  assert.equal(r3.ok, true, 'null open set does not throw and lock is closed');
+
+  // undefined (default) should work
+  const r4 = applyLayout(current(), {
+    sections: ['Main Hall'],
+    tables: [{ id: 1, name: 'Changed', section: 'Main Hall', capacity: 2 }]
+  });
+  assert.equal(r4.ok, true, 'undefined open set uses default');
+});
+
+test('rename detection with leading whitespace in stored name', () => {
+  const curr = {
+    restaurant_id: 'r', revision: 1, count: 1, next_id: 2,
+    sections: ['Main Hall'],
+    tables: [{ id: 1, name: ' T1', section: 'Main Hall', capacity: 2 }]
+  };
+  const open = new Set(['1']);
+
+  // Resending the same name (with whitespace) should not trigger rename
+  const sameRaw = applyLayout(curr, {
+    sections: ['Main Hall'],
+    tables: [{ id: 1, name: ' T1', section: 'Main Hall', capacity: 2 }]
+  }, open);
+  assert.equal(sameRaw.ok, true, 'resending stored name unchanged (with space) is ok');
+
+  // Renaming to different should trigger lock
+  const renamed = applyLayout(curr, {
+    sections: ['Main Hall'],
+    tables: [{ id: 1, name: 'Other', section: 'Main Hall', capacity: 2 }]
+  }, open);
+  assert.equal(renamed.ok, false);
+  assert.equal(renamed.status, 409);
+  assert.equal(renamed.code, 'TABLE_HAS_OPEN_BILL');
+  assert.deepEqual(renamed.details[0].action, 'rename');
+});
+
+test('happy path with deep freeze of both current and input to catch mutations', () => {
+  function deepFreeze(obj) {
+    Object.freeze(obj);
+    for (const key in obj) {
+      if (obj[key] && typeof obj[key] === 'object') {
+        deepFreeze(obj[key]);
+      }
+    }
+    return obj;
+  }
+
+  const snap = current();
+  const input = {
+    sections: ['AC Room', 'Main Hall', 'Patio'],
+    tables: [
+      { id: 3, name: 'Window 1', section: 'AC Room', capacity: 6 },
+      { id: 1, name: 'T1', section: 'Main Hall', capacity: 2 },
+      { name: 'P1', section: 'Patio', capacity: 4 }
+    ]
+  };
+
+  const snapFrozen = deepFreeze(JSON.parse(JSON.stringify(snap)));
+  const inputFrozen = deepFreeze(JSON.parse(JSON.stringify(input)));
+
+  const r = applyLayout(snapFrozen, inputFrozen);
+  assert.equal(r.ok, true);
+  // Both should still be frozen (mutations would throw)
+  assert.deepEqual(snapFrozen, JSON.parse(JSON.stringify(snap)));
+  assert.deepEqual(inputFrozen, JSON.parse(JSON.stringify(input)));
+});
