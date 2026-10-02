@@ -310,31 +310,59 @@ test('(e) updateItem with duplicate pair: non-key changes succeed, renames colli
 });
 
 test('(f) Categories: case-insensitive matching and relabeling', () => {
-  // Create a menu where item is stored with lowercase category but list entry is canonical case
+  // Original spec: list entry 'Starters' (canonical), item stored as 'starters' (lowercase)
   const m = menu();
-  m.categories = ['starters', 'Mains'];  // lowercase
-  m.items[0].category = 'starters';
+  m.items[0].category = 'starters';  // item stored as lowercase, list stays 'Starters'
 
   // renameCategory should relabel items regardless of stored case
-  const renamed = renameCategory(m, 'starters', 'Appetisers');
+  const renamed = renameCategory(m, 'Starters', 'Appetisers');
   assert.equal(renamed.ok, true);
   assert.equal(renamed.data.items.find(i => i.id === 'm1').category, 'Appetisers', 'item was relabeled');
 
-  // deleteCategory('starters') should see the item and reject
-  const deleteAttempt = deleteCategory(m, 'starters');
+  // deleteCategory('Starters') should see the item and reject
+  const deleteAttempt = deleteCategory(m, 'Starters');
   assert.equal(deleteAttempt.code, 'CATEGORY_NOT_EMPTY');
 
   // reorderCategories should accept different-case names and store canonical spellings (from the menu)
-  const m2 = menu();
-  m2.categories = ['starters', 'mains'];  // lowercase
-  const reordered = reorderCategories(m2, ['MAINS', 'STARTERS']);
+  const reordered = reorderCategories(m, ['Mains', 'Starters']);
   assert.equal(reordered.ok, true);
-  assert.deepEqual(reordered.data.categories, ['mains', 'starters'], 'canonical spellings from the menu');
+  assert.deepEqual(reordered.data.categories, ['Mains', 'Starters'], 'canonical spellings from the menu');
 
   // findCategory should work: exact match first, then case-insensitive
   assert.equal(findCategory(['Starters', 'Mains'], 'Starters'), 'Starters', 'exact match');
   assert.equal(findCategory(['Starters', 'Mains'], 'starters'), 'Starters', 'case-insensitive match');
   assert.equal(findCategory(['Starters', 'Mains'], 'STARTERS'), 'Starters', 'case-insensitive match');
+});
+
+test('(f2) reorderCategories rejects duplicate input after canonicalization', () => {
+  // ['Mains', 'mains'] both resolve to 'Mains', creating a duplicate - should reject INVALID_ORDER
+  const r1 = reorderCategories(menu(), ['Mains', 'mains']);
+  assert.equal(r1.code, 'INVALID_ORDER');
+
+  // ['Mains', 'Mains '] both resolve to 'Mains', creating a duplicate - should reject
+  const r2 = reorderCategories(menu(), ['Mains', 'Mains ']);
+  assert.equal(r2.code, 'INVALID_ORDER');
+
+  // Input menu should not be modified
+  const original = menu();
+  const snapshot = JSON.parse(JSON.stringify(original));
+  reorderCategories(original, ['Mains', 'mains']);
+  assert.deepEqual(original, snapshot, 'input menu unchanged after failed reorder');
+});
+
+test('(f3) addItem and updateItem do not throw on day-parts with hasOwnProperty key', () => {
+  // Regression test for hasOwnProperty pollution: should not throw TypeError when key is present
+  const valid = {
+    name: 'Test', category: 'Starters', price: 10, isVeg: true,
+    day_parts: [{ id: 'd', label: 'L', starts_at: '10:00', ends_at: '15:00', price: 50, hasOwnProperty: 'polluted' }]
+  };
+
+  // Should complete without throwing TypeError; hasOwnProperty key is just extra data on the object
+  const addResult = addItem(menu(), valid);
+  assert.equal(addResult.ok, true, 'addItem should accept day-part with hasOwnProperty key');
+
+  const updateResult = updateItem(menu(), 'm1', { day_parts: [{ id: 'd', label: 'L', starts_at: '10:00', ends_at: '15:00', price: 50, hasOwnProperty: 'polluted' }] });
+  assert.equal(updateResult.ok, true, 'updateItem should accept day-part with hasOwnProperty key');
 });
 
 test('(g) Non-mutation: operations do not modify input menu', () => {

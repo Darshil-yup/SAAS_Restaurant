@@ -118,10 +118,10 @@ export function validateItemInput(input, { partial = false } = {}) {
       && clean.every((d, i) => {
         const rawD = raw[i];
         const labelOk = String(rawD.label ?? '').length <= LIMITS.variantLabel;
-        const priceOk = !rawD.hasOwnProperty('price') || isMoney(rawD.price);
+        const priceOk = !Object.prototype.hasOwnProperty.call(rawD, 'price') || isMoney(rawD.price);
         const variantsOk = !rawD.variant_prices || (typeof rawD.variant_prices === 'object' && !Array.isArray(rawD.variant_prices)
           && Object.values(rawD.variant_prices).every(vp => isMoney(vp)));
-        const daysOk = !rawD.hasOwnProperty('days') || (Array.isArray(rawD.days)
+        const daysOk = !Object.prototype.hasOwnProperty.call(rawD, 'days') || (Array.isArray(rawD.days)
           && rawD.days.every(day => Number.isInteger(day) && day >= 0 && day <= 6));
         return labelOk && priceOk && variantsOk && daysOk;
       });
@@ -225,7 +225,7 @@ export function reorderCategories(menu, names) {
     return invalid([{ field: 'names', message: 'names must list every existing category exactly once' }], 'INVALID_ORDER');
   }
   const canonical = names.map(n => findCategory(menu.categories, n));
-  if (canonical.some(c => !c)) {
+  if (canonical.some(c => !c) || new Set(canonical).size !== canonical.length) {
     return invalid([{ field: 'names', message: 'names must list every existing category exactly once' }], 'INVALID_ORDER');
   }
   return { ok: true, data: { ...menu, categories: canonical } };
