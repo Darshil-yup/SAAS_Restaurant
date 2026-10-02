@@ -1,0 +1,240 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { previewImport, applyImport } from '../lib/menuImport.js';
+
+const menu = () => ({
+  restaurant_id: 'r', revision: 2,
+  categories: ['Starters', 'Mains', 'Desserts'],
+  items: [
+    { id: 'm1', name: 'Paneer Tikka', price: 230, category: 'Starters', isVeg: true, available: true },
+    {
+      id: 'm2', name: 'Dal Tadka', price: 190, category: 'Mains', isVeg: true, available: true,
+      variants: [{ id: 'v_half', label: 'Half', price: 120 }, { id: 'v_full', label: 'Full', price: 190, available: false }],
+      modifier_groups: [{ id: 'g1', label: 'Spice', min: 1, max: 1, options: [{ id: 'o1', label: 'Mild', price_delta: 0, available: true }] }]
+    },
+    { id: 'm3', name: 'Gulab Jamun', price: 90, category: 'Desserts', isVeg: true, available: true, station: 'cold' }
+  ]
+});
+
+test('merge updates a matched item (name + category, case-insensitive) and shows the field diff', () => {
+  const p = previewImport(menu(), [{ name: 'paneer tikka', category: 'STARTERS', price: '250' }]);
+  assert.equal(p.ok, true);
+  assert.equal(p.rows[0].status, 'updated');
+  assert.equal(p.rows[0].matched_id, 'm1');
+  assert.deepEqual(p.rows[0].changes, [{ field: 'price', from: 230, to: 250 }]);
+  assert.deepEqual(p.counts, { new: 0, updated: 1, unchanged: 0, error: 0, removed: 0 });
+
+  const a = applyImport(menu(), [{ name: 'paneer tikka', category: 'STARTERS', price: '250' }]);
+  assert.equal(a.data.items.find(i => i.id === 'm1').price, 250);
+  assert.equal(a.data.items.length, 3);
+});
+
+test('blank cells and absent columns never overwrite; modifiers and variants survive', () => {
+  const rows = [{ name: 'Dal Tadka', category: 'Mains', price: '200', veg: '', available: '', station: '' }];
+  const p = previewImport(menu(), rows);
+  assert.deepEqual(p.rows[0].changes.map(c => c.field), ['price']);
+  const item = applyImport(menu(), rows).data.items.find(i => i.id === 'm2');
+  assert.equal(item.price, 200);
+  assert.equal(item.modifier_groups.length, 1);
+  assert.equal(item.variants.length, 2);
+});
+
+test('an id that matches takes precedence; an unknown id falls back to name + category', () => {
+  const byId = previewImport(menu(), [{ id: 'm3', name: 'Gulab Jamun (2 pcs)', category: 'Desserts' }]);
+  assert.equal(byId.rows[0].matched_id, 'm3');
+  assert.equal(byId.rows[0].status, 'updated');
+
+  const unknown = previewImport(menu(), [{ id: 'zzz', name: 'Paneer Tikka', category: 'Starters' }]);
+  assert.equal(unknown.rows[0].matched_id, 'm1');
+});
+
+test('a new item needs veg; the reported row number follows the spreadsheet (header = row 1)', () => {
+  const p = previewImport(menu(), [{ name: 'Chaas', category: 'Beverages', price: '50' }]);
+  assert.equal(p.rows[0].status, 'error');
+  assert.equal(p.rows[0].row, 2);
+  assert.ok(p.rows[0].errors.some(e => e.startsWith('veg is required')));
+
+  const hinted = previewImport(menu(), [{ __row: 7, name: 'Chaas', category: 'Beverages', price: '50' }]);
+  assert.equal(hinted.rows[0].row, 7);
+});
+
+test('a new item gets a generated id (never the supplied unknown one) and a new category', () => {
+  const rows = [{ id: 'zzz', name: 'Masala Chaas', category: 'Beverages', price: '50', veg: 'yes', station: 'bar' }];
+  const p = previewImport(menu(), rows);
+  assert.equal(p.rows[0].status, 'new');
+  const a = applyImport(menu(), rows);
+  const added = a.data.items.at(-1);
+  assert.match(added.id, /^m_[0-9a-f]{8}$/);
+  assert.equal(added.station, 'bar');
+  assert.equal(added.isVeg, true);
+  assert.equal(added.available, true);
+  assert.deepEqual(a.data.categories, ['Starters', 'Mains', 'Desserts', 'Beverages']);
+});
+
+test('veg accepts yes/no/true/false/1/0/veg/non-veg and rejects anything else', () => {
+  const ok = ['yes', 'No', 'TRUE', 'false', '1', '0', 'veg', 'Non-Veg'].map(v => ({ name: `D${v}`, category: 'Starters', price: '10', veg: v }));
+  assert.equal(previewImport(menu(), ok).counts.error, 0);
+  const bad = previewImport(menu(), [{ name: 'X', category: 'Starters', price: '10', veg: 'maybe' }]);
+  assert.ok(bad.rows[0].errors.includes('veg must be yes or no'));
+});
+
+test('prices are strict: above 0, at most 2 decimals, digits only', () => {
+  const run = price => previewImport(menu(), [{ name: 'X', category: 'Starters', price, veg: 'yes' }]).rows[0].status;
+  assert.equal(run('50'), 'new');
+  assert.equal(run('50.5'), 'new');
+  assert.equal(run('12.345'), 'error');
+  assert.equal(run('-5'), 'error');
+  assert.equal(run('0'), 'error');
+  assert.equal(run('₹50'), 'error');
+});
+
+test('variants: matched labels keep id and 86\'d state, new labels get slug ids, omitted labels are removed', () => {
+  const rows = [{ name: 'Dal Tadka', category: 'Mains', variants: 'Half:130|Large:260' }];
+  const item = applyImport(menu(), rows).data.items.find(i => i.id === 'm2');
+  assert.deepEqual(item.variants, [
+    { id: 'v_half', label: 'Half', price: 130, available: true },
+    { id: 'v_large', label: 'Large', price: 260, available: true }
+  ]);
+
+  const same = previewImport(menu(), [{ name: 'Dal Tadka', category: 'Mains', variants: 'Half:120|Full:190' }]);
+  assert.equal(same.rows[0].status, 'unchanged', 'identical variants (86\'d Full included) are not a change');
+  const kept = applyImport(menu(), [{ name: 'Dal Tadka', category: 'Mains', variants: 'Half:120|Full:190' }]);
+  assert.equal(kept.data.items.find(i => i.id === 'm2').variants[1].available, false);
+});
+
+test('variants: bad syntax, repeated labels and non-positive prices are errors; slug collisions are suffixed', () => {
+  const run = variants => previewImport(menu(), [{ name: 'X', category: 'Starters', veg: 'yes', variants }]).rows[0];
+  assert.equal(run('Half-180').status, 'error');
+  assert.equal(run('Half:180|half:200').status, 'error');
+  assert.equal(run('Half:0').status, 'error');
+
+  const a = applyImport(menu(), [{ name: 'X', category: 'Starters', veg: 'yes', variants: 'Half Plate:100|Half-Plate!:120' }]);
+  assert.deepEqual(a.data.items.at(-1).variants.map(v => v.id), ['v_half_plate', 'v_half_plate_2']);
+});
+
+test('a new item with variants and no price takes the first variant price', () => {
+  const a = applyImport(menu(), [{ name: 'Chai', category: 'Beverages', veg: 'yes', variants: 'Cutting:20|Full:40' }]);
+  assert.equal(a.data.items.at(-1).price, 20);
+});
+
+test('duplicate rows in one file are flagged on the second occurrence', () => {
+  const p = previewImport(menu(), [
+    { name: 'Paneer Tikka', category: 'Starters', price: '240' },
+    { name: 'paneer tikka', category: 'starters', price: '250' }
+  ]);
+  assert.equal(p.rows[0].status, 'updated');
+  assert.equal(p.rows[1].status, 'error');
+  assert.equal(p.rows[1].errors[0], 'duplicate of row 2');
+});
+
+test('replace removes unmatched items but keeps non-importable fields on matched ones', () => {
+  const rows = [{ name: 'Dal Tadka', category: 'Mains', price: '200' }];
+  const p = previewImport(menu(), rows, { mode: 'replace' });
+  assert.equal(p.counts.removed, 2);
+
+  const a = applyImport(menu(), rows, { mode: 'replace' });
+  assert.deepEqual(a.data.items.map(i => i.id), ['m2']);
+  assert.equal(a.data.items[0].modifier_groups.length, 1);
+  assert.deepEqual(a.data.categories, ['Mains'], 'categories no longer used are dropped');
+});
+
+test('replace never deletes an item whose row had an error', () => {
+  const rows = [
+    { name: 'Paneer Tikka', category: 'Starters', price: '230' },
+    { name: 'Dal Tadka', category: 'Mains', price: 'abc' }
+  ];
+  const p = previewImport(menu(), rows, { mode: 'replace' });
+  assert.equal(p.counts.removed, 1, 'only Gulab Jamun is unmatched');
+  const a = applyImport(menu(), rows, { mode: 'replace', skipInvalid: true });
+  assert.deepEqual(a.data.items.map(i => i.id).sort(), ['m1', 'm2']);
+  assert.equal(a.data.items.find(i => i.id === 'm2').price, 190, 'the bad row left the item untouched');
+});
+
+test('applyImport blocks on row errors unless skipInvalid is set', () => {
+  const rows = [
+    { name: 'Paneer Tikka', category: 'Starters', price: '240' },
+    { name: 'Bad', category: 'Starters', price: 'abc', veg: 'yes' }
+  ];
+  const blocked = applyImport(menu(), rows);
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.status, 400);
+  assert.equal(blocked.code, 'INVALID_ROWS');
+  assert.equal(blocked.details.length, 1);
+  assert.equal(blocked.details[0].row, 3);
+
+  const skipped = applyImport(menu(), rows, { skipInvalid: true });
+  assert.equal(skipped.ok, true);
+  assert.equal(skipped.meta.skipped, 1);
+  assert.equal(skipped.data.items.find(i => i.id === 'm1').price, 240);
+  assert.equal(skipped.data.items.length, 3);
+});
+
+test('row limits: empty and over-2000 files are refused', () => {
+  assert.equal(previewImport(menu(), []).code, 'NO_ROWS');
+  const many = Array.from({ length: 2001 }, (_, i) => ({ name: `D${i}`, category: 'Bulk', price: '1', veg: 'yes' }));
+  assert.equal(previewImport(menu(), many).code, 'TOO_MANY_ROWS');
+  assert.equal(previewImport(menu(), many.slice(0, 2000)).ok, true);
+});
+
+// ADDITIONAL TESTS FOR ID UNIQUENESS AND KEY-COLLISION GUARD
+
+test('ID uniqueness: idGen option generates unique ids, skipping duplicates', () => {
+  const ids = ['m1', 'm1', 'mNew1', 'mNew2'];
+  let callCount = 0;
+  const idGen = () => ids[callCount++];
+
+  const rows = [
+    { name: 'Item1', category: 'Starters', price: '100', veg: 'yes' },
+    { name: 'Item2', category: 'Starters', price: '100', veg: 'yes' }
+  ];
+
+  const a = applyImport(menu(), rows, { idGen });
+  const newItems = a.data.items.slice(-2);
+
+  // First item should get 'mNew1' (skipped 'm1' twice)
+  // Second item should get 'mNew2'
+  assert.equal(newItems[0].id, 'mNew1');
+  assert.equal(newItems[1].id, 'mNew2');
+  assert.ok(newItems.every(i => !a.data.items.slice(0, 3).some(existing => existing.id === i.id)));
+});
+
+test('key-collision guard: would duplicate error when id-match rename creates collision', () => {
+  const rows = [{ id: 'm1', name: 'Dal Tadka', category: 'Mains' }];
+  const p = previewImport(menu(), rows);
+
+  assert.equal(p.rows[0].status, 'error');
+  assert.ok(p.rows[0].errors.some(e => e.includes('would duplicate')));
+  assert.ok(p.rows[0].errors.some(e => e.includes('Dal Tadka')));
+  assert.ok(p.rows[0].errors.some(e => e.includes('Mains')));
+});
+
+test('key-collision guard: duplicate of row N when new row collides with earlier new row', () => {
+  const rows = [
+    { name: 'NewItem', category: 'Starters', price: '100', veg: 'yes' },
+    { name: 'NewItem', category: 'Starters', price: '150', veg: 'yes' }
+  ];
+  const p = previewImport(menu(), rows);
+
+  assert.equal(p.rows[0].status, 'new');
+  assert.equal(p.rows[1].status, 'error');
+  assert.equal(p.rows[1].errors[0], 'duplicate of row 2');
+});
+
+test('key-collision guard: unchanged key is never blocked by collision guard', () => {
+  // Create a menu with a legacy duplicate pair
+  const menuWithDuplicate = () => ({
+    restaurant_id: 'r', revision: 2,
+    categories: ['Starters', 'Mains'],
+    items: [
+      { id: 'm1', name: 'Paneer Tikka', price: 230, category: 'Starters', isVeg: true, available: true },
+      { id: 'm2', name: 'Paneer Tikka', price: 250, category: 'Starters', isVeg: true, available: true }
+    ]
+  });
+
+  // Re-importing unchanged row for m1 should not error
+  const rows = [{ id: 'm1', name: 'Paneer Tikka', category: 'Starters', price: '230' }];
+  const p = previewImport(menuWithDuplicate(), rows);
+
+  assert.equal(p.rows[0].status, 'unchanged');
+  assert.equal(p.rows[0].errors.length, 0);
+});
