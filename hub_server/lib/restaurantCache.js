@@ -170,6 +170,8 @@ class RestaurantCache {
   }
 
   loadFromDisk() {
+    // A catalog edited on the hub (revision > 0) is real even when the owner has emptied it;
+    // only legacy cloud-written caches (no revision) are judged by whether they hold rows.
     let hasMenu = false;
     let hasTables = false;
 
@@ -177,7 +179,7 @@ class RestaurantCache {
       if (fs.existsSync(MENU_CACHE_FILE)) {
         const rawMenu = fs.readFileSync(MENU_CACHE_FILE, 'utf-8');
         this.menuCache = JSON.parse(rawMenu);
-        hasMenu = Boolean(this.menuCache && (this.menuCache.items?.length > 0 || this.menuCache.categories?.length > 0));
+        hasMenu = Boolean(this.menuCache && ((this.menuCache.revision || 0) > 0 || this.menuCache.items?.length > 0 || this.menuCache.categories?.length > 0));
       }
     } catch (err) {
       console.warn('⚠️ Could not load menu_cache.json from disk:', err.message);
@@ -187,7 +189,7 @@ class RestaurantCache {
       if (fs.existsSync(TABLES_CACHE_FILE)) {
         const rawTables = fs.readFileSync(TABLES_CACHE_FILE, 'utf-8');
         this.tablesCache = JSON.parse(rawTables);
-        hasTables = Boolean(this.tablesCache && this.tablesCache.tables?.length > 0);
+        hasTables = Boolean(this.tablesCache && ((this.tablesCache.revision || 0) > 0 || this.tablesCache.tables?.length > 0));
       }
     } catch (err) {
       console.warn('⚠️ Could not load tables_cache.json from disk:', err.message);
@@ -292,6 +294,23 @@ class RestaurantCache {
     }
   }
 
+  /**
+   * The only way cloud data may enter the cache. It runs in the same write chain as
+   * updateCatalog and re-checks authority at the moment of writing, so a pull that was
+   * already in flight when a hub edit committed loses instead of overwriting it.
+   * Resolves true if the data was applied; callers broadcast only then.
+   */
+  applyPulledCatalog(kind, fresh) {
+    const run = this._writeChain.then(async () => {
+      if (this.isHubAuthoritative(kind)) return false;
+      if (kind === 'menu') await this.saveMenuToDisk(fresh);
+      else await this.saveTablesToDisk(fresh);
+      return true;
+    });
+    this._writeChain = run.catch(() => {});
+    return run;
+  }
+
   async fetchMenuFromSupabase(restaurantId) {
     try {
       let catData = null;
@@ -384,13 +403,13 @@ class RestaurantCache {
       const freshTables = this.isHubAuthoritative('tables') ? null : await this.fetchTablesFromSupabase(restaurantId);
 
       if (freshMenu) {
-        await this.saveMenuToDisk(freshMenu);
-        if (broadcastFn) broadcastFn('menu_updated', freshMenu);
+        const applied = await this.applyPulledCatalog('menu', freshMenu);
+        if (applied && broadcastFn) broadcastFn('menu_updated', freshMenu);
       }
 
       if (freshTables) {
-        await this.saveTablesToDisk(freshTables);
-        if (broadcastFn) broadcastFn('tables_updated', freshTables);
+        const applied = await this.applyPulledCatalog('tables', freshTables);
+        if (applied && broadcastFn) broadcastFn('tables_updated', freshTables);
       }
 
       this.isUninitialized = false;
@@ -419,8 +438,8 @@ class RestaurantCache {
           console.log('🔔 Supabase Realtime: menu_items change detected! Refreshing local cache & broadcasting live...');
           const fresh = await this.fetchMenuFromSupabase(restaurantId);
           if (fresh) {
-            await this.saveMenuToDisk(fresh);
-            if (broadcastFn) broadcastFn('menu_updated', fresh);
+            const applied = await this.applyPulledCatalog('menu', fresh);
+            if (applied && broadcastFn) broadcastFn('menu_updated', fresh);
           }
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_categories' }, async () => {
@@ -428,8 +447,8 @@ class RestaurantCache {
           console.log('🔔 Supabase Realtime: menu_categories change detected! Refreshing local cache & broadcasting live...');
           const fresh = await this.fetchMenuFromSupabase(restaurantId);
           if (fresh) {
-            await this.saveMenuToDisk(fresh);
-            if (broadcastFn) broadcastFn('menu_updated', fresh);
+            const applied = await this.applyPulledCatalog('menu', fresh);
+            if (applied && broadcastFn) broadcastFn('menu_updated', fresh);
           }
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'tables' }, async () => {
@@ -437,8 +456,8 @@ class RestaurantCache {
           console.log('🔔 Supabase Realtime: tables change detected! Refreshing local cache & broadcasting live...');
           const fresh = await this.fetchTablesFromSupabase(restaurantId);
           if (fresh) {
-            await this.saveTablesToDisk(fresh);
-            if (broadcastFn) broadcastFn('tables_updated', fresh);
+            const applied = await this.applyPulledCatalog('tables', fresh);
+            if (applied && broadcastFn) broadcastFn('tables_updated', fresh);
           }
         })
         .subscribe((status) => {
@@ -456,13 +475,13 @@ class RestaurantCache {
       const freshTables = this.isHubAuthoritative('tables') ? null : await this.fetchTablesFromSupabase(restaurantId);
 
       if (freshMenu) {
-        await this.saveMenuToDisk(freshMenu);
-        if (broadcastFn) broadcastFn('menu_updated', freshMenu);
+        const applied = await this.applyPulledCatalog('menu', freshMenu);
+        if (applied && broadcastFn) broadcastFn('menu_updated', freshMenu);
       }
 
       if (freshTables) {
-        await this.saveTablesToDisk(freshTables);
-        if (broadcastFn) broadcastFn('tables_updated', freshTables);
+        const applied = await this.applyPulledCatalog('tables', freshTables);
+        if (applied && broadcastFn) broadcastFn('tables_updated', freshTables);
       }
 
       this.isUninitialized = false;
