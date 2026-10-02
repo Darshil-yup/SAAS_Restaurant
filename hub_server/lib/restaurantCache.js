@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { supabase, checkSupabaseConnection } from './supabaseClient.js';
+import { normalizeCloudMenuItem } from './menuNormalize.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -225,99 +226,7 @@ class RestaurantCache {
       } catch (e) {}
 
       let categories = (catData && catData.length) ? catData.map(c => c.name || c) : [];
-      let items = (itemData && itemData.length) ? itemData.map(i => {
-        // Variants ship as JSONB from Supabase (`variants: [{ id, label, price }]`).
-        // Fall back to the top-level price if nothing valid comes through.
-        const rawVariants = Array.isArray(i.variants) ? i.variants : [];
-        const variants = rawVariants
-          .filter(v => v && v.id && v.label && Number.isFinite(Number(v.price)))
-          .map(v => ({
-            id: String(v.id),
-            label: String(v.label).slice(0, 40),
-            price: Number(v.price),
-            // Per-variant availability (M2 · PR 14). Legacy variants without
-            // the field default to true; only an explicit `false` marks 86'd.
-            available: v.available !== false
-          }));
-        // Modifier groups ship as JSONB (`modifier_groups: [{ id, label, min,
-        // max, options: [{ id, label, price_delta }] }]`). Every level is
-        // defensively normalised so a partial row never crashes the pricer;
-        // an option missing a numeric price_delta is dropped, a group missing
-        // an id or label is dropped, and the group is only kept when it has
-        // at least one valid option.
-        const rawGroups = Array.isArray(i.modifier_groups) ? i.modifier_groups : [];
-        const modifier_groups = rawGroups
-          .map(g => {
-            if (!g || !g.id || !g.label) return null;
-            const options = (Array.isArray(g.options) ? g.options : [])
-              .filter(o => o && o.id && o.label && Number.isFinite(Number(o.price_delta)))
-              .map(o => ({
-                id: String(o.id),
-                label: String(o.label).slice(0, 40),
-                price_delta: Number(o.price_delta),
-                // Per-option availability (M2 · PR 14). Same default-true
-                // discipline as variants — only explicit `false` marks 86'd.
-                available: o.available !== false
-              }));
-            if (options.length === 0) return null;
-            const min = Number.isFinite(Number(g.min)) ? Math.max(0, Math.floor(Number(g.min))) : 0;
-            const max = Number.isFinite(Number(g.max)) ? Math.max(min, Math.floor(Number(g.max))) : options.length;
-            return { id: String(g.id), label: String(g.label).slice(0, 40), min, max, options };
-          })
-          .filter(Boolean);
-        // Day-parts ship as JSONB (`day_parts: [{ id, label, starts_at,
-        // ends_at, days?, price?, variant_prices? }]`). Same defensive
-        // normalisation as modifier_groups — a window missing a valid
-        // HH:MM range is dropped so lib/dayParts.js never has to guard.
-        const HHMM = /^([01]?\d|2[0-3]):([0-5]\d)$/;
-        const rawDayParts = Array.isArray(i.day_parts) ? i.day_parts : [];
-        const day_parts = rawDayParts
-          .map(dp => {
-            if (!dp || !dp.id || !dp.label) return null;
-            if (!HHMM.test(String(dp.starts_at)) || !HHMM.test(String(dp.ends_at))) return null;
-            const out = {
-              id: String(dp.id),
-              label: String(dp.label).slice(0, 40),
-              starts_at: String(dp.starts_at),
-              ends_at: String(dp.ends_at)
-            };
-            if (Array.isArray(dp.days) && dp.days.length > 0) {
-              out.days = dp.days.map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6);
-            }
-            if (Number.isFinite(Number(dp.price)) && Number(dp.price) >= 0) {
-              out.price = Number(dp.price);
-            }
-            if (dp.variant_prices && typeof dp.variant_prices === 'object') {
-              const vp = {};
-              for (const [k, v] of Object.entries(dp.variant_prices)) {
-                if (Number.isFinite(Number(v)) && Number(v) >= 0) vp[String(k)] = Number(v);
-              }
-              if (Object.keys(vp).length > 0) out.variant_prices = vp;
-            }
-            // A window with neither `price` nor `variant_prices` is useless
-            // — drop it rather than let the pricer silently fall back.
-            if (out.price === undefined && !out.variant_prices) return null;
-            return out;
-          })
-          .filter(Boolean);
-        // Station routing (M2 · PR 15): 'hot' | 'cold' | 'bar' | (default
-        // 'hot' when the column is missing / unknown). Whitelist happens
-        // in lib/kotRouting.js at read time, so a mistagged row still
-        // fires to the main kitchen rather than into an unlabeled queue.
-        const station = i.station ? String(i.station).toLowerCase() : undefined;
-        return {
-          id: i.id,
-          name: i.name,
-          price: Number(i.price) || 0,
-          category: i.category || i.category_name || 'General',
-          isVeg: i.is_veg !== undefined ? Boolean(i.is_veg) : Boolean(i.isVeg ?? true),
-          available: i.available !== undefined ? Boolean(i.available) : true,
-          ...(variants.length > 0 ? { variants } : {}),
-          ...(modifier_groups.length > 0 ? { modifier_groups } : {}),
-          ...(day_parts.length > 0 ? { day_parts } : {}),
-          ...(station ? { station } : {})
-        };
-      }) : [];
+      let items = (itemData && itemData.length) ? itemData.map(normalizeCloudMenuItem) : [];
 
       // Fallback to default seed if Supabase table returns empty
       if (!categories.length && !items.length) {
