@@ -14,6 +14,11 @@ export const isMoney = n => typeof n === 'number' && Number.isFinite(n) && n > 0
 
 export const sameKey = (a, b) => norm(a.name) === norm(b.name) && norm(a.category) === norm(b.category);
 
+/** Find a category by exact match first, then case-insensitive. */
+export function findCategory(categories, name) {
+  return categories.find(c => c === name) ?? categories.find(c => norm(c) === norm(name)) ?? null;
+}
+
 /** The spelling a category already has in the menu, else the trimmed input. */
 export function canonicalCategory(categories, name) {
   return categories.find(c => norm(c) === norm(name)) ?? String(name).trim();
@@ -27,9 +32,9 @@ const notFound = (code, error) => ({ ok: false, status: 404, code, error });
 const conflict = (code, error) => ({ ok: false, status: 409, code, error });
 
 /**
- * Strict validation of editor input. Unlike the lenient cloud normaliser (which
- * silently drops bad nested rows), anything malformed is rejected so the user
- * hears about it. With `partial`, only the keys present are checked.
+ * Strict validation of editor input. Every malformed value is rejected so the user
+ * hears about it: no silent truncation, coercion or dropping of nested rows.
+ * With `partial`, only the keys present are checked.
  */
 export function validateItemInput(input, { partial = false } = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -73,8 +78,8 @@ export function validateItemInput(input, { partial = false } = {}) {
     const ok = clean
       && clean.length === raw.length
       && new Set(clean.map(v => v.id)).size === clean.length
-      && clean.every(v => isMoney(v.price));
-    if (!ok) errors.push({ field: 'variants', message: 'every variant needs a unique id, a label and a price above 0' });
+      && clean.every((v, i) => isMoney(v.price) && String(raw[i].label ?? '').length <= LIMITS.variantLabel);
+    if (!ok) errors.push({ field: 'variants', message: 'every variant needs a unique id, a label (≤40 chars) and a price above 0 with at most 2 decimals' });
     else out.variants = clean;
   }
   if (has('modifier_groups')) {
@@ -83,22 +88,45 @@ export function validateItemInput(input, { partial = false } = {}) {
     const ok = clean
       && clean.length === raw.length
       && new Set(clean.map(g => g.id)).size === clean.length
-      && clean.every((g, i) =>
-        g.options.length === raw[i].options.length
-        && new Set(g.options.map(o => o.id)).size === g.options.length
-        && g.min <= g.options.length);
+      && clean.every((g, i) => {
+        const rawG = raw[i];
+        const minOk = (rawG.min ?? 0) >= 0 && Number.isInteger(rawG.min ?? 0);
+        const maxOk = rawG.max >= 1 && Number.isInteger(rawG.max) && rawG.max >= g.min;
+        const labelOk = String(rawG.label ?? '').length <= LIMITS.variantLabel;
+        const optionsOk = g.options.length === rawG.options.length
+          && new Set(g.options.map(o => o.id)).size === g.options.length
+          && g.options.every((o, oi) => {
+            const rawO = rawG.options[oi];
+            return typeof rawO.price_delta === 'number' && Number.isFinite(rawO.price_delta)
+              && String(rawO.label ?? '').length <= LIMITS.variantLabel;
+          });
+        return minOk && maxOk && labelOk && optionsOk && g.min <= g.options.length;
+      });
     if (!ok) {
       errors.push({
         field: 'modifier_groups',
-        message: 'every group needs a unique id, a label, at least as many options as its minimum, and every option a unique id, a label and a numeric price_delta'
+        message: 'every group needs a unique id, a label (≤40 chars), min≥0 and max≥1 with max≥min; every option needs a unique id, a label (≤40 chars) and a numeric price_delta'
       });
     } else out.modifier_groups = clean;
   }
   if (has('day_parts')) {
     const raw = input.day_parts;
     const clean = Array.isArray(raw) ? normalizeDayParts(raw) : null;
-    if (!clean || clean.length !== raw.length || new Set(clean.map(d => d.id)).size !== clean.length) {
-      errors.push({ field: 'day_parts', message: 'every day-part needs a unique id, a label, HH:MM start/end times and a price or variant_prices' });
+    const ok = clean
+      && clean.length === raw.length
+      && new Set(clean.map(d => d.id)).size === clean.length
+      && clean.every((d, i) => {
+        const rawD = raw[i];
+        const labelOk = String(rawD.label ?? '').length <= LIMITS.variantLabel;
+        const priceOk = !rawD.hasOwnProperty('price') || isMoney(rawD.price);
+        const variantsOk = !rawD.variant_prices || (typeof rawD.variant_prices === 'object' && !Array.isArray(rawD.variant_prices)
+          && Object.values(rawD.variant_prices).every(vp => isMoney(vp)));
+        const daysOk = !rawD.hasOwnProperty('days') || (Array.isArray(rawD.days)
+          && rawD.days.every(day => Number.isInteger(day) && day >= 0 && day <= 6));
+        return labelOk && priceOk && variantsOk && daysOk;
+      });
+    if (!ok) {
+      errors.push({ field: 'day_parts', message: 'every day-part needs a unique id, a label (≤40 chars), HH:MM start/end times; price (if present) must be >0 with ≤2 decimals, variant_prices values must be valid prices, days (if present) must all be integers 0–6' });
     } else out.day_parts = clean;
   }
 
@@ -140,7 +168,7 @@ export function updateItem(menu, id, input) {
   for (const k of EMPTYABLE) {
     if (Array.isArray(item[k]) && item[k].length === 0) delete item[k];
   }
-  if (menu.items.some((i, n) => n !== idx && sameKey(i, item))) {
+  if (!sameKey(menu.items[idx], item) && menu.items.some((i, n) => n !== idx && sameKey(i, item))) {
     return conflict('DUPLICATE_ITEM', `"${item.name}" already exists in ${item.category}.`);
   }
   return {
@@ -174,7 +202,7 @@ export function addCategory(menu, name) {
 }
 
 export function renameCategory(menu, from, to) {
-  const current = menu.categories.find(c => c === from) ?? menu.categories.find(c => norm(c) === norm(from));
+  const current = findCategory(menu.categories, from);
   if (!current) return notFound('CATEGORY_NOT_FOUND', `No category named "${from}".`);
   const clean = cleanCategoryName(to);
   if (!clean) return badCategoryName();
@@ -186,24 +214,27 @@ export function renameCategory(menu, from, to) {
     data: {
       ...menu,
       categories: menu.categories.map(c => (c === current ? clean : c)),
-      items: menu.items.map(i => (i.category === current ? { ...i, category: clean } : i))
+      items: menu.items.map(i => (norm(i.category) === norm(current) ? { ...i, category: clean } : i))
     },
     meta: { name: clean }
   };
 }
 
 export function reorderCategories(menu, names) {
-  const ok = Array.isArray(names)
-    && names.length === menu.categories.length
-    && new Set(names).size === names.length
-    && names.every(n => menu.categories.includes(n));
-  if (!ok) return invalid([{ field: 'names', message: 'names must list every existing category exactly once' }], 'INVALID_ORDER');
-  return { ok: true, data: { ...menu, categories: [...names] } };
+  if (!Array.isArray(names) || names.length !== menu.categories.length || new Set(names).size !== names.length) {
+    return invalid([{ field: 'names', message: 'names must list every existing category exactly once' }], 'INVALID_ORDER');
+  }
+  const canonical = names.map(n => findCategory(menu.categories, n));
+  if (canonical.some(c => !c)) {
+    return invalid([{ field: 'names', message: 'names must list every existing category exactly once' }], 'INVALID_ORDER');
+  }
+  return { ok: true, data: { ...menu, categories: canonical } };
 }
 
 export function deleteCategory(menu, name) {
-  if (!menu.categories.includes(name)) return notFound('CATEGORY_NOT_FOUND', `No category named "${name}".`);
-  const count = menu.items.filter(i => i.category === name).length;
-  if (count > 0) return conflict('CATEGORY_NOT_EMPTY', `"${name}" still has ${count} item(s). Move or delete them first.`);
-  return { ok: true, data: { ...menu, categories: menu.categories.filter(c => c !== name) } };
+  const category = findCategory(menu.categories, name);
+  if (!category) return notFound('CATEGORY_NOT_FOUND', `No category named "${name}".`);
+  const count = menu.items.filter(i => norm(i.category) === norm(category)).length;
+  if (count > 0) return conflict('CATEGORY_NOT_EMPTY', `"${category}" still has ${count} item(s). Move or delete them first.`);
+  return { ok: true, data: { ...menu, categories: menu.categories.filter(c => c !== category) } };
 }

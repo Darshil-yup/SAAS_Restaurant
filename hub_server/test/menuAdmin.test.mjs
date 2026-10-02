@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   addItem, updateItem, deleteItem,
-  addCategory, renameCategory, reorderCategories, deleteCategory
+  addCategory, renameCategory, reorderCategories, deleteCategory,
+  findCategory
 } from '../lib/menuAdmin.js';
 
 const menu = () => ({
@@ -157,4 +158,198 @@ test('categories: add, rename (relabels items), reorder, delete-only-when-empty'
   const withEmpty = addCategory(menu(), 'Desserts').data;
   assert.deepEqual(deleteCategory(withEmpty, 'Desserts').data.categories, ['Starters', 'Mains']);
   assert.equal(deleteCategory(menu(), 'Nope').status, 404);
+});
+
+// Fix round 1 tests for defect coverage
+
+test('(a) Top-level and variant prices: null, "", " ", 0, -1, 3-decimal reject', () => {
+  const base = { name: 'X', category: 'Starters', isVeg: true };
+  const bad = (extra) => addItem(menu(), { ...base, ...extra });
+
+  assert.equal(bad({ price: null }).errors[0].field, 'price');
+  assert.equal(bad({ price: '' }).errors[0].field, 'price');
+  assert.equal(bad({ price: ' ' }).errors[0].field, 'price');
+  assert.equal(bad({ price: 0 }).errors[0].field, 'price');
+  assert.equal(bad({ price: -1 }).errors[0].field, 'price');
+  assert.equal(bad({ price: 1.005 }).errors[0].field, 'price');
+
+  const badVar = (v) => bad({ variants: [{ id: 'v', label: 'X', price: v }] });
+  assert.equal(badVar(null).errors[0].field, 'variants');
+  assert.equal(badVar('').errors[0].field, 'variants');
+  assert.equal(badVar(0).errors[0].field, 'variants');
+  assert.equal(badVar(-5).errors[0].field, 'variants');
+  assert.equal(badVar(2.555).errors[0].field, 'variants');
+});
+
+test('(b) Day-part prices and variant_prices strict validation', () => {
+  const base = { name: 'X', category: 'Starters', price: 10, isVeg: true };
+  const bad = (extra) => addItem(menu(), { ...base, ...extra });
+
+  // Day-part price validation
+  assert.equal(bad({ day_parts: [{ id: 'd', label: 'L', starts_at: '10:00', ends_at: '15:00', price: null }] }).errors[0].field, 'day_parts');
+  assert.equal(bad({ day_parts: [{ id: 'd', label: 'L', starts_at: '10:00', ends_at: '15:00', price: '' }] }).errors[0].field, 'day_parts');
+  assert.equal(bad({ day_parts: [{ id: 'd', label: 'L', starts_at: '10:00', ends_at: '15:00', price: 0 }] }).errors[0].field, 'day_parts');
+  assert.equal(bad({ day_parts: [{ id: 'd', label: 'L', starts_at: '10:00', ends_at: '15:00', price: -1 }] }).errors[0].field, 'day_parts');
+  assert.equal(bad({ day_parts: [{ id: 'd', label: 'L', starts_at: '10:00', ends_at: '15:00', price: 12.345 }] }).errors[0].field, 'day_parts');
+
+  // variant_prices validation
+  assert.equal(bad({ variants: [{ id: 'v_h', label: 'H', price: 100 }, { id: 'v_f', label: 'F', price: 200 }], day_parts: [{ id: 'd', label: 'L', starts_at: '10:00', ends_at: '15:00', variant_prices: { v_h: null } }] }).errors[0].field, 'day_parts');
+  assert.equal(bad({ variants: [{ id: 'v_h', label: 'H', price: 100 }], day_parts: [{ id: 'd', label: 'L', starts_at: '10:00', ends_at: '15:00', variant_prices: { v_h: 0 } }] }).errors[0].field, 'day_parts');
+  assert.equal(bad({ variants: [{ id: 'v_h', label: 'H', price: 100 }], day_parts: [{ id: 'd', label: 'L', starts_at: '10:00', ends_at: '15:00', variant_prices: { v_h: -1 } }] }).errors[0].field, 'day_parts');
+
+  // days validation
+  assert.equal(bad({ day_parts: [{ id: 'd', label: 'L', starts_at: '10:00', ends_at: '15:00', price: 50, days: [9] }] }).errors[0].field, 'day_parts');
+  assert.equal(bad({ day_parts: [{ id: 'd', label: 'L', starts_at: '10:00', ends_at: '15:00', price: 50, days: [1.5] }] }).errors[0].field, 'day_parts');
+
+  // Half/Full probe: a day-part with null price should be rejected
+  assert.equal(bad({
+    variants: [{ id: 'v_h', label: 'Half', price: 120 }, { id: 'v_f', label: 'Full', price: 200 }],
+    day_parts: [{ id: 'd', label: 'Lunch', starts_at: '00:00', ends_at: '23:59', price: null, variant_prices: { v_h: 160 } }]
+  }).errors[0].field, 'day_parts');
+
+  // Valid day-part should pass
+  const valid = addItem(menu(), {
+    name: 'Test', category: 'Starters', price: 10, isVeg: true,
+    variants: [{ id: 'v_h', label: 'Half', price: 120 }, { id: 'v_f', label: 'Full', price: 200 }],
+    day_parts: [{ id: 'd', label: 'Lunch', starts_at: '11:00', ends_at: '15:00', price: 250 }]
+  });
+  assert.equal(valid.ok, true);
+
+  // Valid variant_prices-only window
+  const validVar = addItem(menu(), {
+    name: 'Test2', category: 'Starters', price: 10, isVeg: true,
+    variants: [{ id: 'v_h', label: 'Half', price: 120 }],
+    day_parts: [{ id: 'd', label: 'Lunch', starts_at: '11:00', ends_at: '15:00', variant_prices: { v_h: 160 } }]
+  });
+  assert.equal(validVar.ok, true);
+});
+
+test('(c) Modifier group min/max and option price_delta validation', () => {
+  const base = { name: 'X', category: 'Starters', price: 10, isVeg: true };
+  const bad = (extra) => addItem(menu(), { ...base, ...extra });
+
+  // max validation: '', null, 0, 0.5 should be rejected
+  assert.equal(bad({ modifier_groups: [{ id: 'g', label: 'Pick', max: '', options: [{ id: 'o', label: 'A', price_delta: 0 }] }] }).errors[0].field, 'modifier_groups');
+  assert.equal(bad({ modifier_groups: [{ id: 'g', label: 'Pick', max: null, options: [{ id: 'o', label: 'A', price_delta: 0 }] }] }).errors[0].field, 'modifier_groups');
+  assert.equal(bad({ modifier_groups: [{ id: 'g', label: 'Pick', max: 0, options: [{ id: 'o', label: 'A', price_delta: 0 }] }] }).errors[0].field, 'modifier_groups');
+  assert.equal(bad({ modifier_groups: [{ id: 'g', label: 'Pick', max: 0.5, options: [{ id: 'o', label: 'A', price_delta: 0 }] }] }).errors[0].field, 'modifier_groups');
+
+  // min -1 should be rejected
+  assert.equal(bad({ modifier_groups: [{ id: 'g', label: 'Pick', min: -1, max: 2, options: [{ id: 'o', label: 'A', price_delta: 0 }] }] }).errors[0].field, 'modifier_groups');
+
+  // max < min should be rejected
+  assert.equal(bad({ modifier_groups: [{ id: 'g', label: 'Pick', min: 2, max: 1, options: [{ id: 'o', label: 'A', price_delta: 0 }] }] }).errors[0].field, 'modifier_groups');
+
+  // option price_delta validation: null, '', '5', true should be rejected
+  assert.equal(bad({ modifier_groups: [{ id: 'g', label: 'Pick', min: 1, max: 1, options: [{ id: 'o', label: 'A', price_delta: null }] }] }).errors[0].field, 'modifier_groups');
+  assert.equal(bad({ modifier_groups: [{ id: 'g', label: 'Pick', min: 1, max: 1, options: [{ id: 'o', label: 'A', price_delta: '' }] }] }).errors[0].field, 'modifier_groups');
+  assert.equal(bad({ modifier_groups: [{ id: 'g', label: 'Pick', min: 1, max: 1, options: [{ id: 'o', label: 'A', price_delta: '5' }] }] }).errors[0].field, 'modifier_groups');
+  assert.equal(bad({ modifier_groups: [{ id: 'g', label: 'Pick', min: 1, max: 1, options: [{ id: 'o', label: 'A', price_delta: true }] }] }).errors[0].field, 'modifier_groups');
+
+  // Negative and 0 price_delta should be accepted
+  const valid = addItem(menu(), {
+    name: 'Test', category: 'Starters', price: 10, isVeg: true,
+    modifier_groups: [{ id: 'g', label: 'Pick', min: 0, max: 2, options: [{ id: 'o1', label: 'Add', price_delta: 10 }, { id: 'o2', label: 'Free', price_delta: 0 }, { id: 'o3', label: 'Discount', price_delta: -5 }] }]
+  });
+  assert.equal(valid.ok, true);
+
+  // Existing valid group from brief should still pass
+  const briefValid = addItem(menu(), {
+    name: 'Biryani', category: 'Starters', price: 300, isVeg: false,
+    modifier_groups: [{ id: 'g', label: 'Spice', min: 1, max: 1, options: [{ id: 'o', label: 'Hot', price_delta: 0 }] }]
+  });
+  assert.equal(briefValid.ok, true);
+});
+
+test('(d) Label length limit: 40-char accepted, 41-char rejected', () => {
+  const base = { name: 'X', category: 'Starters', price: 10, isVeg: true };
+  const bad = (extra) => addItem(menu(), { ...base, ...extra });
+  const long40 = 'a'.repeat(40);
+  const long41 = 'a'.repeat(41);
+
+  // Variant label
+  const variantOk = addItem(menu(), { ...base, variants: [{ id: 'v', label: long40, price: 50 }] });
+  assert.equal(variantOk.ok, true);
+  assert.equal(bad({ variants: [{ id: 'v', label: long41, price: 50 }] }).errors[0].field, 'variants');
+
+  // Modifier group label
+  const groupOk = addItem(menu(), { ...base, modifier_groups: [{ id: 'g', label: long40, min: 1, max: 1, options: [{ id: 'o', label: 'X', price_delta: 0 }] }] });
+  assert.equal(groupOk.ok, true);
+  assert.equal(bad({ modifier_groups: [{ id: 'g', label: long41, min: 1, max: 1, options: [{ id: 'o', label: 'X', price_delta: 0 }] }] }).errors[0].field, 'modifier_groups');
+
+  // Option label
+  const optionOk = addItem(menu(), { ...base, modifier_groups: [{ id: 'g', label: 'Pick', min: 1, max: 1, options: [{ id: 'o', label: long40, price_delta: 0 }] }] });
+  assert.equal(optionOk.ok, true);
+  assert.equal(bad({ modifier_groups: [{ id: 'g', label: 'Pick', min: 1, max: 1, options: [{ id: 'o', label: long41, price_delta: 0 }] }] }).errors[0].field, 'modifier_groups');
+
+  // Day-part label
+  const dpOk = addItem(menu(), { ...base, day_parts: [{ id: 'd', label: long40, starts_at: '10:00', ends_at: '15:00', price: 50 }] });
+  assert.equal(dpOk.ok, true);
+  assert.equal(bad({ day_parts: [{ id: 'd', label: long41, starts_at: '10:00', ends_at: '15:00', price: 50 }] }).errors[0].field, 'day_parts');
+});
+
+test('(e) updateItem with duplicate pair: non-key changes succeed, renames collide', () => {
+  // Create a menu with two items with the same (name, category)
+  const m = menu();
+  m.items.push({ id: 'm3', name: 'Paneer Tikka', price: 250, category: 'Starters', isVeg: true, available: false });
+
+  // Change availability on a duplicate - should succeed (key unchanged)
+  const avail = updateItem(m, 'm1', { available: false });
+  assert.equal(avail.ok, true);
+  assert.equal(avail.meta.item.available, false);
+
+  // Change price on a duplicate - should succeed (key unchanged)
+  const price = updateItem(m, 'm1', { price: 300 });
+  assert.equal(price.ok, true);
+  assert.equal(price.meta.item.price, 300);
+
+  // Renaming m1 to collide with m2 should fail (key changed, collision)
+  const clash = updateItem(m, 'm1', { name: 'Dal Tadka', category: 'Mains' });
+  assert.equal(clash.status, 409);
+  assert.equal(clash.code, 'DUPLICATE_ITEM');
+});
+
+test('(f) Categories: case-insensitive matching and relabeling', () => {
+  // Create a menu where item is stored with lowercase category but list entry is canonical case
+  const m = menu();
+  m.categories = ['starters', 'Mains'];  // lowercase
+  m.items[0].category = 'starters';
+
+  // renameCategory should relabel items regardless of stored case
+  const renamed = renameCategory(m, 'starters', 'Appetisers');
+  assert.equal(renamed.ok, true);
+  assert.equal(renamed.data.items.find(i => i.id === 'm1').category, 'Appetisers', 'item was relabeled');
+
+  // deleteCategory('starters') should see the item and reject
+  const deleteAttempt = deleteCategory(m, 'starters');
+  assert.equal(deleteAttempt.code, 'CATEGORY_NOT_EMPTY');
+
+  // reorderCategories should accept different-case names and store canonical spellings (from the menu)
+  const m2 = menu();
+  m2.categories = ['starters', 'mains'];  // lowercase
+  const reordered = reorderCategories(m2, ['MAINS', 'STARTERS']);
+  assert.equal(reordered.ok, true);
+  assert.deepEqual(reordered.data.categories, ['mains', 'starters'], 'canonical spellings from the menu');
+
+  // findCategory should work: exact match first, then case-insensitive
+  assert.equal(findCategory(['Starters', 'Mains'], 'Starters'), 'Starters', 'exact match');
+  assert.equal(findCategory(['Starters', 'Mains'], 'starters'), 'Starters', 'case-insensitive match');
+  assert.equal(findCategory(['Starters', 'Mains'], 'STARTERS'), 'Starters', 'case-insensitive match');
+});
+
+test('(g) Non-mutation: operations do not modify input menu', () => {
+  const original = menu();
+  const snapshot = JSON.parse(JSON.stringify(original));
+
+  // addItem
+  const add = addItem(original, { name: 'New', category: 'Starters', price: 100, isVeg: true });
+  assert.deepEqual(original, snapshot, 'original menu unchanged after addItem');
+
+  // updateItem
+  const update = updateItem(original, 'm1', { price: 999 });
+  assert.deepEqual(original, snapshot, 'original menu unchanged after updateItem');
+
+  // renameCategory
+  const rename = renameCategory(original, 'Starters', 'Appetisers');
+  assert.deepEqual(original, snapshot, 'original menu unchanged after renameCategory');
 });
