@@ -25,14 +25,15 @@ const parseMoney = v => {
 const slug = label => label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'x';
 
 // What counts as "changed" for the review table. Legacy variants have no
-// `available` key, so compare it as `!== false`.
+// `available` key, so compare it as `!== false`. Station defaults to 'hot' for
+// round-trip consistency (export writes 'hot', re-import should not mark as changed).
 const VIEW = {
   name: i => i.name,
   category: i => i.category,
   price: i => i.price,
   isVeg: i => i.isVeg,
   available: i => i.available !== false,
-  station: i => i.station,
+  station: i => i.station || 'hot',
   variants: i => (i.variants || []).map(v => [v.id, v.label, v.price, v.available !== false])
 };
 
@@ -67,6 +68,20 @@ function parseVariants(cell, existing) {
     variants.push({ id, label, price, available: true });
   }
   return { variants };
+}
+
+function claimedIds(menu, results) {
+  const claimed = new Set();
+  for (const r of results) {
+    // All rows claim their matched_id if they have one
+    if (r.matched_id) claimed.add(r.matched_id);
+    // Errored rows with no match also claim existing items by name
+    if (r.status === 'error' && !r.matched_id && r.name) {
+      const existing = menu.items.filter(i => norm(i.name) === norm(r.name));
+      for (const e of existing) claimed.add(e.id);
+    }
+  }
+  return claimed;
 }
 
 function processRow(raw, idx, menu, catMap, seen, usedIds, idGen, finalKeys) {
@@ -229,8 +244,9 @@ export function previewImport(menu, rows, { mode = 'merge', idGen = newItemId } 
   const counts = { new: 0, updated: 0, unchanged: 0, error: 0, removed: 0 };
   for (const r of results) counts[r.status]++;
   if (mode === 'replace') {
-    // A row with an error still "claims" the item it matched, so a bad row never deletes data.
-    const claimed = new Set(results.map(r => r.matched_id).filter(Boolean));
+    // A row with an error still "claims" the item it matched or shares a name with,
+    // so a bad row never deletes data.
+    const claimed = claimedIds(menu, results);
     counts.removed = menu.items.filter(i => !claimed.has(i.id)).length;
   }
   return { ok: true, rows: results, counts };
@@ -251,12 +267,23 @@ export function applyImport(menu, rows, { mode = 'merge', skipInvalid = false, i
   }
 
   const good = preview.rows.filter(r => r.status !== 'error');
+
+  // In replace mode, need at least one valid (non-error) row to apply
+  if (mode === 'replace' && good.length === 0) {
+    return {
+      ok: false,
+      status: 400,
+      code: 'NO_VALID_ROWS',
+      error: 'Replace needs at least one valid row. Nothing was changed.'
+    };
+  }
+
   const updatedById = new Map(good.filter(r => r.matched_id).map(r => [r.matched_id, r.item]));
   const fresh = good.filter(r => !r.matched_id).map(r => r.item);
 
   let items;
   if (mode === 'replace') {
-    const claimed = new Set(preview.rows.map(r => r.matched_id).filter(Boolean));
+    const claimed = claimedIds(menu, preview.rows);
     items = [...menu.items.filter(i => claimed.has(i.id)).map(i => updatedById.get(i.id) || i), ...fresh];
   } else {
     items = [...menu.items.map(i => updatedById.get(i.id) || i), ...fresh];

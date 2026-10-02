@@ -238,3 +238,90 @@ test('key-collision guard: unchanged key is never blocked by collision guard', (
   assert.equal(p.rows[0].status, 'unchanged');
   assert.equal(p.rows[0].errors.length, 0);
 });
+
+// FIX ROUND 1: NEW TESTS FOR DEFECTS
+
+test('key guard: an id-rename cannot take a key an earlier row just claimed, in either order', () => {
+  const a = previewImport(menu(), [
+    { name: 'Chaas', category: 'Beverages', price: '50', veg: 'yes' },
+    { id: 'm3', name: 'Chaas', category: 'Beverages' }]);
+  assert.equal(a.rows[1].errors[0], 'duplicate of row 2');
+
+  const b = previewImport(menu(), [
+    { id: 'm3', name: 'Chaas', category: 'Beverages' },
+    { name: 'Chaas', category: 'Beverages', price: '50', veg: 'yes' }]);
+  assert.equal(b.rows[1].errors[0], 'duplicate of row 2');
+});
+
+test('ID uniqueness: a repeat from idGen within one import is skipped', () => {
+  const seq = ['dup', 'dup', 'ok'];
+  const a = applyImport(menu(), [
+    { name: 'A', category: 'Starters', price: '1', veg: 'yes' },
+    { name: 'B', category: 'Starters', price: '1', veg: 'yes' }], { idGen: () => seq.shift() });
+  assert.deepEqual(a.data.items.slice(3).map(i => i.id), ['dup', 'ok']);
+});
+
+test('key-collision guard: exact error message for would_duplicate', () => {
+  const rows = [{ id: 'm1', name: 'Dal Tadka', category: 'Mains' }];
+  const p = previewImport(menu(), rows);
+  assert.equal(p.rows[0].status, 'error');
+  assert.equal(p.rows[0].errors[0], 'would duplicate "Dal Tadka" in Mains');
+  assert.equal(p.rows[0].matched_id, 'm1');
+});
+
+test('blank price on new item is error, on existing item is unchanged', () => {
+  const newItemBlankPrice = previewImport(menu(), [{ name: 'NewItem', category: 'Starters', price: '', veg: 'yes' }]);
+  assert.equal(newItemBlankPrice.rows[0].status, 'error');
+  assert.ok(newItemBlankPrice.rows[0].errors.some(e => e.includes('price is required')));
+
+  const existingItemBlankPrice = previewImport(menu(), [{ name: 'Paneer Tikka', category: 'Starters', price: '' }]);
+  assert.equal(existingItemBlankPrice.rows[0].status, 'unchanged');
+  const item = applyImport(menu(), [{ name: 'Paneer Tikka', category: 'Starters', price: '' }]).data.items.find(i => i.id === 'm1');
+  assert.equal(item.price, 230);
+});
+
+test('variants with blank prices are errors', () => {
+  const run = variants => previewImport(menu(), [{ name: 'X', category: 'Starters', veg: 'yes', variants }]).rows[0];
+  assert.equal(run('Half:').status, 'error');
+  assert.equal(run('Half: ').status, 'error');
+  assert.equal(run('Half:|Full:190').status, 'error');
+});
+
+test('station defaults to "hot" for round-trip consistency', () => {
+  const rows = [{ name: 'Paneer Tikka', category: 'Starters', station: 'hot' }];
+  const p = previewImport(menu(), rows);
+  assert.equal(p.rows[0].status, 'unchanged', 'explicitly setting station to hot should not be a change');
+});
+
+test('NO_VALID_ROWS: replace with no valid rows returns error and menu is unchanged', () => {
+  const original = menu();
+  const snapshot = structuredClone(original);
+
+  const result = applyImport(original, [{ name: 'X' }], { mode: 'replace', skipInvalid: true });
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 400);
+  assert.equal(result.code, 'NO_VALID_ROWS');
+  assert.equal(result.error, 'Replace needs at least one valid row. Nothing was changed.');
+  assert.deepEqual(original, snapshot);
+});
+
+test('NO_VALID_ROWS: wrong-case headers file with replace + skipInvalid returns error', () => {
+  const original = menu();
+  const snapshot = structuredClone(original);
+
+  const result = applyImport(original, [{ Name: 'Dal', Category: 'Mains', Price: '1' }], { mode: 'replace', skipInvalid: true });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'NO_VALID_ROWS');
+  assert.deepEqual(original, snapshot);
+});
+
+test('replace with one valid row plus one invalid row (missing price/veg) keeps claimed existing items', () => {
+  const result = applyImport(menu(), [
+    { name: 'Dal Tadka', category: 'Mains', price: '200' },
+    { name: 'Paneer Tikka', category: 'Specials', price: '', veg: '' }
+  ], { mode: 'replace', skipInvalid: true });
+
+  assert.equal(result.ok, true);
+  assert.ok(result.data.items.some(i => i.id === 'm1'), 'Paneer Tikka should be kept (name-claimed)');
+  assert.ok(result.data.items.some(i => i.id === 'm2'), 'Dal Tadka should be kept (matched)');
+});
