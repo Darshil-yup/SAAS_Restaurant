@@ -60,8 +60,14 @@ export function ItemEditor({ item, menu, defaultCategory, onClose, onSaved, onSt
   const dirty = JSON.stringify(form) !== JSON.stringify(initial);
   const hasChanges = isNew || Object.keys(changedPayload(item, form)).length > 0;
   const err = path => serverErrors[path] ?? (showErrors ? checks.errors[path] : undefined);
-  const edit = change => setForm(prev => ({ ...prev, ...change }));
-  const editList = (key, index, patch) => setForm(prev => ({ ...prev, [key]: prev[key].map((row, i) => (i === index ? { ...row, ...patch } : row)) }));
+  // Every edit is applied to the latest form (never to a copy captured by an earlier render), so quick
+  // successive clicks cannot undo each other. `change` and `patch` are either an object or a function
+  // of the current form / row that returns one.
+  const edit = change => setForm(prev => ({ ...prev, ...(typeof change === 'function' ? change(prev) : change) }));
+  const editList = (key, index, patch) => setForm(prev => ({
+    ...prev,
+    [key]: prev[key].map((row, i) => (i === index ? { ...row, ...(typeof patch === 'function' ? patch(row) : patch) } : row))
+  }));
   const removeFrom = (key, index) => setForm(prev => ({ ...prev, [key]: prev[key].filter((_, i) => i !== index) }));
 
   const categories = menu.categories;
@@ -122,28 +128,28 @@ export function ItemEditor({ item, menu, defaultCategory, onClose, onSaved, onSt
     }
   };
 
-  const addVariant = () => edit({ variants: [...form.variants, { id: makeId('v', form.variants.map(v => v.id)), label: '', price: '', available: true }] });
-  const addGroup = () => edit({
-    modifier_groups: [...form.modifier_groups, {
-      id: makeId('g', form.modifier_groups.map(g => g.id)), label: '', min: '0', max: '1',
-      options: [{ id: makeId('o', []), label: '', price_delta: '0', available: true }]
+  const optionIds = prev => prev.modifier_groups.flatMap(g => g.options.map(o => o.id));
+  const addVariant = () => edit(prev => ({ variants: [...prev.variants, { id: makeId('v', prev.variants.map(v => v.id)), label: '', price: '', available: true }] }));
+  const addGroup = () => edit(prev => ({
+    modifier_groups: [...prev.modifier_groups, {
+      id: makeId('g', prev.modifier_groups.map(g => g.id)), label: '', min: '0', max: '1',
+      options: [{ id: makeId('o', optionIds(prev)), label: '', price_delta: '0', available: true }]
     }]
-  });
-  const addOption = gi => {
-    const group = form.modifier_groups[gi];
-    const taken = form.modifier_groups.flatMap(g => g.options.map(o => o.id));
-    editList('modifier_groups', gi, { options: [...group.options, { id: makeId('o', taken), label: '', price_delta: '0', available: true }] });
-  };
-  const editOption = (gi, oi, patch) => editList('modifier_groups', gi, {
-    options: form.modifier_groups[gi].options.map((o, j) => (j === oi ? { ...o, ...patch } : o))
-  });
-  const addDayPart = () => edit({
-    day_parts: [...form.day_parts, { id: makeId('d', form.day_parts.map(d => d.id)), label: '', starts_at: '', ends_at: '', days: [], price: '', variant_prices: {} }]
-  });
-  const toggleDay = (di, day) => {
-    const days = form.day_parts[di].days;
-    editList('day_parts', di, { days: days.includes(day) ? days.filter(n => n !== day) : [...days, day] });
-  };
+  }));
+  const addOption = gi => edit(prev => ({
+    modifier_groups: prev.modifier_groups.map((g, i) => (i === gi
+      ? { ...g, options: [...g.options, { id: makeId('o', optionIds(prev)), label: '', price_delta: '0', available: true }] }
+      : g))
+  }));
+  const editOption = (gi, oi, patch) => editList('modifier_groups', gi, row => ({
+    options: row.options.map((o, j) => (j === oi ? { ...o, ...patch } : o))
+  }));
+  const addDayPart = () => edit(prev => ({
+    day_parts: [...prev.day_parts, { id: makeId('d', prev.day_parts.map(d => d.id)), label: '', starts_at: '', ends_at: '', days: [], price: '', variant_prices: {} }]
+  }));
+  const toggleDay = (di, day) => editList('day_parts', di, row => ({
+    days: row.days.includes(day) ? row.days.filter(n => n !== day) : [...row.days, day]
+  }));
 
   return (
     <Sheet open onOpenChange={open => { if (!open) requestClose(); }}>
@@ -271,7 +277,7 @@ export function ItemEditor({ item, menu, defaultCategory, onClose, onSaved, onSt
                     <AvailableSwitch checked={o.available} onChange={available => editOption(gi, oi, { available })} label={`Group ${gi + 1} option ${oi + 1} available`} />
                     <RemoveButton
                       label={`Remove option ${oi + 1}`}
-                      onClick={() => editList('modifier_groups', gi, { options: g.options.filter((_, j) => j !== oi) })}
+                      onClick={() => editList('modifier_groups', gi, row => ({ options: row.options.filter((_, j) => j !== oi) }))}
                     />
                   </div>
                 ))}
@@ -324,7 +330,7 @@ export function ItemEditor({ item, menu, defaultCategory, onClose, onSaved, onSt
                       <TextInput
                         inputMode="decimal"
                         value={d.variant_prices[v.id] ?? ''}
-                        onChange={e => editList('day_parts', di, { variant_prices: { ...d.variant_prices, [v.id]: e.target.value } })}
+                        onChange={e => { const { value } = e.target; editList('day_parts', di, row => ({ variant_prices: { ...row.variant_prices, [v.id]: value } })); }}
                         invalid={Boolean(err(`day_parts.${di}.variant_prices.${v.id}`))}
                         placeholder="optional"
                         autoComplete="off"
