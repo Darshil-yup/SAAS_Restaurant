@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { VegBadge } from '@/components/VegBadge';
 import { explainError, hubSend } from './api';
-import { ConfirmDialog, EmptyState, Field, ListSkeleton, Notice, TextInput, formatPrice } from './ui';
+import { ConfirmDialog, EmptyState, Field, ListSkeleton, Notice, TextInput, formatPrice, useLastValue } from './ui';
 import { ItemEditor } from './ItemEditor';
 import { ImportDialog } from './ImportDialog';
 
@@ -42,6 +42,8 @@ export function MenuTab({ menu, error, onRetry, onReload, onStale, notify }) {
   const [actionError, setActionError] = useState(null);
   const [renaming, setRenaming] = useState(null); // { from, to, error }
   const [deletingCategory, setDeletingCategory] = useState(null);
+  const deletingShown = useLastValue(deletingCategory);
+  const renamingShown = useLastValue(renaming);
   const [newCategory, setNewCategory] = useState('');
   const [newCategoryError, setNewCategoryError] = useState('');
 
@@ -312,11 +314,11 @@ export function MenuTab({ menu, error, onRetry, onReload, onStale, notify }) {
       {importing && <ImportDialog menu={menu} onClose={() => setImporting(false)} onImported={onImported} />}
 
       <Dialog open={Boolean(renaming)} onOpenChange={open => { if (!open) setRenaming(null); }}>
-        <DialogContent>
+        <DialogContent showCloseButton={false}>
           <form onSubmit={submitRename} className="grid gap-4" noValidate>
             <DialogHeader>
               <DialogTitle>Rename category</DialogTitle>
-              <DialogDescription>Every item in “{renaming?.from}” moves to the new name.</DialogDescription>
+              <DialogDescription>Every item in “{renamingShown?.from}” moves to the new name.</DialogDescription>
             </DialogHeader>
             <Field label="Name" htmlFor="rename-category" error={renaming?.error}>
               <TextInput id="rename-category" value={renaming?.to ?? ''} onChange={e => setRenaming({ ...renaming, to: e.target.value, error: '' })} invalid={Boolean(renaming?.error)} autoComplete="off" autoFocus />
@@ -331,7 +333,7 @@ export function MenuTab({ menu, error, onRetry, onReload, onStale, notify }) {
 
       <ConfirmDialog
         open={Boolean(deletingCategory)}
-        title={`Delete “${deletingCategory ?? ''}”?`}
+        title={`Delete “${deletingShown ?? ''}”?`}
         busy={busy}
         onCancel={() => setDeletingCategory(null)}
         onConfirm={deleteCategory}

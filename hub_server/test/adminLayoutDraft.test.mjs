@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   draftFromLayout, toPayload, addSection, renameSection, moveSection, deleteSection,
   addTable, renameTable, setCapacity, moveTableToSection, moveTableWithin, deleteTable,
-  validateDraft, isDirty, tablesIn
+  validateDraft, isDirty, tablesIn, orderedTables
 } from '../../src/admin/lib/layoutDraft.js';
 import { applyLayout } from '../lib/tablesAdmin.js';
 
@@ -73,6 +73,18 @@ test('toPayload orders tables section by section in the sections order and keeps
   // T4 sits after T3 (AC Room) in the flat list but belongs to Main Hall.
   assert.deepEqual(payload.tables.map(t => t.name), ['T1', 'T2', 'T4', 'T3']);
   assert.deepEqual(payload.tables[0], { id: 1, name: 'T1', section: 'Main Hall', capacity: 2 });
+});
+
+test('orderedTables is the tables in the exact order toPayload sends them, so error rows can be found by payload index', () => {
+  let draft = draftFromLayout(layout());
+  draft = moveTableWithin(draft, 'id:4', -1);
+  draft = addTable(draft, 'Patio');
+  const ordered = orderedTables(draft);
+  assert.deepEqual(ordered.map(t => t.name), toPayload(draft).tables.map(t => t.name));
+  assert.deepEqual(ordered.map(t => t.key), ['id:1', 'id:4', 'id:2', 'id:3', 'new:1']);
+  // a table in an unlisted section is still there, last
+  const ghost = { sections: ['A'], tables: [{ key: 'id:1', id: 1, name: 'T1', section: 'Ghost', capacity: 2 }, { key: 'id:2', id: 2, name: 'T2', section: 'A', capacity: 2 }] };
+  assert.deepEqual(orderedTables(ghost).map(t => t.key), ['id:2', 'id:1']);
 });
 
 test('toPayload gives new tables no id and trims names and sections', () => {

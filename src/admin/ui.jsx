@@ -1,5 +1,5 @@
-import React from 'react';
-import { AlertTriangle, CheckCircle2, Info, Loader2 } from 'lucide-react';
+import React, { useRef } from 'react';
+import { AlertTriangle, CheckCircle2, Info, Loader2, X } from 'lucide-react';
 import { cn } from 'cn';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -66,6 +66,22 @@ export function NativeSelect({ className, invalid, children, ...props }) {
     >
       {children}
     </select>
+  );
+}
+
+/** The last non-empty value it was given: lets a dialog keep its text while it fades out after `value` is cleared. */
+export function useLastValue(value) {
+  const last = useRef(value);
+  if (value) last.current = value;
+  return last.current;
+}
+
+/** A 40px close button for a dialog or sheet (the built-in one is 28px). Pass showCloseButton={false} to the content. */
+export function CloseButton({ onClick, disabled }) {
+  return (
+    <Button type="button" variant="ghost" size="icon" className="absolute top-2 right-2 size-10" aria-label="Close" onClick={onClick} disabled={disabled}>
+      <X aria-hidden="true" />
+    </Button>
   );
 }
 

@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { explainError, hubSend } from './api';
-import { Notice, TextInput, formatPrice } from './ui';
+import { CloseButton, Notice, TextInput, formatPrice } from './ui';
 import { MENU_COLUMNS, csvToRows, menuToCsv, rowsFromTable } from './lib/csv';
 
 // "Import menu": read a .csv or .xlsx in the browser (the hub never sees the file), ask the hub for a
@@ -252,7 +252,8 @@ export function ImportDialog({ menu, onClose, onImported }) {
 
   return (
     <Dialog open onOpenChange={open => { if (!open && !working) onClose(); }}>
-      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-4xl">
+      <DialogContent showCloseButton={false} className="max-h-[92vh] overflow-y-auto sm:max-w-4xl">
+        <CloseButton onClick={onClose} disabled={working} />
         <DialogHeader>
           <DialogTitle>Import menu</DialogTitle>
           <DialogDescription>
@@ -348,7 +349,7 @@ export function ImportDialog({ menu, onClose, onImported }) {
             )}
 
             {counts.error > 0 && (
-              <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <label className="flex min-h-10 cursor-pointer items-center gap-2 text-sm">
                 <Checkbox checked={skipInvalid} onCheckedChange={checked => setSkipInvalid(Boolean(checked))} aria-label="Import valid rows only" />
                 Import valid rows only <span className="text-muted-foreground">({counts.error} {counts.error === 1 ? 'row' : 'rows'} with errors will be skipped)</span>
               </label>

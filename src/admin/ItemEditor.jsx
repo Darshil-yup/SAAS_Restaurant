@@ -6,7 +6,7 @@ import { Switch } from '@/components/ui/switch';
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { VegBadge } from '@/components/VegBadge';
 import { explainError, hubSend } from './api';
-import { ConfirmDialog, Field, NativeSelect, Notice, TextInput } from './ui';
+import { CloseButton, ConfirmDialog, Field, NativeSelect, Notice, TextInput } from './ui';
 import { blankForm, changedPayload, createPayload, itemToForm, makeId, validateForm } from './lib/itemForm';
 
 // The item editor: a sheet with the basics, variants, modifier groups and day-part prices of one item.
@@ -147,7 +147,8 @@ export function ItemEditor({ item, menu, defaultCategory, onClose, onSaved, onSt
 
   return (
     <Sheet open onOpenChange={open => { if (!open) requestClose(); }}>
-      <SheetContent className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl">
+      <SheetContent showCloseButton={false} className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl">
+        <CloseButton onClick={requestClose} />
         <SheetHeader className="border-b border-border p-4 pr-14">
           <SheetTitle>{isNew ? 'New item' : 'Edit item'}</SheetTitle>
           <SheetDescription>

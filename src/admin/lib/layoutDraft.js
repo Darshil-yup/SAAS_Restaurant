@@ -43,12 +43,12 @@ export function draftFromLayout(layout) {
 }
 
 /**
- * The body of `PUT /admin/tables/layout`, minus `base_revision`: sections in order, and the tables
- * section by section in that order with the within-section order kept. New tables carry no id. The
- * whole floor goes in one call, so a table left out is a table deleted: one whose section is not in
- * the list is therefore sent last (the hub refuses it by name) rather than dropped.
+ * The tables in the order a save sends them: section by section in the sections order, with the
+ * within-section order kept. The hub reports a bad table as `tables[i]`, and i is the index in this
+ * list. The whole floor goes in one call, so a table left out is a table deleted: one whose section
+ * is not in the list is therefore sent last (the hub refuses it by name) rather than dropped.
  */
-export function toPayload(draft) {
+export function orderedTables(draft) {
   const ordered = [];
   const placed = new Set();
   for (const section of draft.sections) {
@@ -60,10 +60,17 @@ export function toPayload(draft) {
     }
   }
   for (const t of draft.tables) if (!placed.has(t.key)) ordered.push(t);
+  return ordered;
+}
 
+/**
+ * The body of `PUT /admin/tables/layout`, minus `base_revision`: sections in order, then the tables
+ * as orderedTables lists them. New tables carry no id.
+ */
+export function toPayload(draft) {
   return {
     sections: draft.sections.map(s => String(s).trim()),
-    tables: ordered.map(t => ({
+    tables: orderedTables(draft).map(t => ({
       ...(t.id !== undefined ? { id: t.id } : {}),
       name: String(t.name ?? '').trim(),
       section: String(t.section ?? '').trim(),
