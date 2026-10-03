@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, Pencil, Plus, Search, Trash2, UtensilsCrossed } from 'lucide-react';
+import { ArrowDown, ArrowUp, Pencil, Plus, Search, Trash2, Upload, UtensilsCrossed } from 'lucide-react';
 import { cn } from 'cn';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,7 @@ import { VegBadge } from '@/components/VegBadge';
 import { explainError, hubSend } from './api';
 import { ConfirmDialog, EmptyState, Field, ListSkeleton, Notice, TextInput, formatPrice } from './ui';
 import { ItemEditor } from './ItemEditor';
+import { ImportDialog } from './ImportDialog';
 
 // The Menu tab: a category rail beside the item table. Every action is one write to the hub followed
 // by a fresh read of the menu (the hub's answer carries only the new revision), and writes are
@@ -36,6 +37,7 @@ export function MenuTab({ menu, error, onRetry, onReload, onStale, notify }) {
   const [selected, setSelected] = useState(ALL);
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState(null); // { item } (item null for a new one)
+  const [importing, setImporting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState(null);
   const [renaming, setRenaming] = useState(null); // { from, to, error }
@@ -161,6 +163,11 @@ export function MenuTab({ menu, error, onRetry, onReload, onStale, notify }) {
     setEditing(null);
   };
 
+  const onImported = async () => {
+    await onReload();
+    notify('Menu imported.');
+  };
+
   const position = categories.indexOf(current);
   const heading = q ? `Results for “${query.trim()}”` : current === ALL ? 'All items' : current;
 
@@ -219,6 +226,7 @@ export function MenuTab({ menu, error, onRetry, onReload, onStale, notify }) {
               <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
               <TextInput type="search" aria-label="Search items" placeholder="Search items" value={query} onChange={e => setQuery(e.target.value)} className="pl-9" autoComplete="off" />
             </div>
+            <Button type="button" variant="outline" className="h-10" disabled={busy} onClick={() => setImporting(true)}><Upload aria-hidden="true" /> Import menu</Button>
             <Button type="button" className="h-10" disabled={busy} onClick={() => setEditing({ item: null })}><Plus aria-hidden="true" /> Add item</Button>
           </div>
 
@@ -300,6 +308,8 @@ export function MenuTab({ menu, error, onRetry, onReload, onStale, notify }) {
           onStale={onStale}
         />
       )}
+
+      {importing && <ImportDialog menu={menu} onClose={() => setImporting(false)} onImported={onImported} />}
 
       <Dialog open={Boolean(renaming)} onOpenChange={open => { if (!open) setRenaming(null); }}>
         <DialogContent>
