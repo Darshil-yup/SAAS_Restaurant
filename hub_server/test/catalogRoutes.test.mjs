@@ -446,7 +446,7 @@ const rawHttp = ({ port, path: urlPath, headers = {}, body, method = 'POST' }) =
     let text = '';
     res.setEncoding('utf8');
     res.on('data', chunk => { text += chunk; });
-    res.on('end', () => resolve({ status: res.statusCode, text, json: () => JSON.parse(text) }));
+    res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, text, json: () => JSON.parse(text) }));
   });
   req.on('error', reject);
   if (payload) req.write(payload);
@@ -575,6 +575,50 @@ test('a merge import with skip_invalid but no valid row is refused with NO_VALID
   await new Promise(r => setTimeout(r, 400)); // a broadcast would have arrived well within this
   ws.close();
   assert.ok(!seen.includes('menu_updated'), 'nor broadcast a menu update');
+});
+
+// ---------------------------------------------------------------- the /admin page
+
+const expectReceptionOnlyPage = (res, label) => {
+  assert.equal(res.status, 403, label);
+  assert.match(res.headers['content-type'] || '', /^text\/plain/, `${label}: a person in a browser gets plain text, not JSON`);
+  assert.equal(res.text, 'Reception only', label);
+};
+
+test('GET /admin on a hub that does not trust loopback is a plain-text 403 "Reception only", token or not', async () => {
+  for (const [label, auth] of [['with an enrolled handset token', { Authorization: `Bearer ${token}` }], ['with no token', {}]]) {
+    for (const p of ['/admin', '/admin.html']) {
+      expectReceptionOnlyPage(await rawHttp({ port: handset.port, path: p, method: 'GET', headers: auth }), `${p} ${label}`);
+    }
+  }
+});
+
+test('GET /admin from loopback is refused when the request is not addressed to this machine (Host or Origin)', async () => {
+  const port = rec.port;
+  for (const [label, headers] of [
+    ['a foreign Host (DNS rebinding)', { Host: `evil.example:${port}` }],
+    ['a foreign Host and Origin', { Host: `evil.example:${port}`, Origin: `http://evil.example:${port}` }],
+    ['a foreign Origin', { Host: `127.0.0.1:${port}`, Origin: 'http://evil.example' }]
+  ]) {
+    for (const p of ['/admin', '/admin.html']) {
+      expectReceptionOnlyPage(await rawHttp({ port, path: p, method: 'GET', headers }), `${p} with ${label}`);
+    }
+  }
+});
+
+test('GET /admin from the reception laptop is not refused', async () => {
+  const port = rec.port;
+  for (const [label, headers] of [
+    ['127.0.0.1', { Host: `127.0.0.1:${port}` }],
+    ['localhost', { Host: `localhost:${port}` }],
+    ['[::1]', { Host: `[::1]:${port}` }]
+  ]) {
+    const res = await rawHttp({ port, path: '/admin', method: 'GET', headers });
+    // 200 when dist/ has been built (admin.html, or the index.html fallback); a plain 404 when it has not.
+    // Anything else, a 403 above all, means the guard got in the way of the reception laptop.
+    assert.ok([200, 404].includes(res.status), `${label}: expected 200 or 404, got ${res.status}: ${res.text.slice(0, 120)}`);
+    assert.notEqual(res.text, 'Reception only', label);
+  }
 });
 
 // Keep this one last: it adds 2000 items to the shared hub.

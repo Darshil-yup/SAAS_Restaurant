@@ -27,7 +27,7 @@ import { applyLayout } from './lib/tablesAdmin.js';
 import { crashReporter, attachHubProcessHandlers } from './lib/crashReporter.js';
 
 attachHubProcessHandlers();
-import { deviceAuth, requireDevice, requireReception, extractToken, isLoopback, trustLocalAddress } from './lib/deviceAuth.js';
+import { deviceAuth, requireDevice, requireReception, isReceptionRequest, extractToken, isLoopback, trustLocalAddress } from './lib/deviceAuth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1203,6 +1203,12 @@ app.get('/qr', async (req, res) => {
   }
 });
 
+// The admin page is reception-only. A person in a browser gets a plain-text 403 (the JSON API under
+// /admin answers RECEPTION_ONLY as JSON). The static handler below would also serve dist/admin.html as
+// a file, so that path gets the same answer.
+const refuseNonReception = (res) => res.status(403).type('text/plain').send('Reception only');
+app.get('/admin.html', (req, res, next) => (isReceptionRequest(req) ? next() : refuseNonReception(res)));
+
 // Serve static built frontend files if dist folder exists
 const distPath = path.join(__dirname, '../dist');
 if (fs.existsSync(distPath)) {
@@ -1237,6 +1243,14 @@ app.get('/dashboard', (req, res) => {
     return res.sendFile(dashboardHtml);
   }
   res.sendFile(path.join(distPath, 'index.html'));
+});
+
+// Dedicated route for the reception-only Menu & Tables admin page (same decision as requireReception)
+app.get('/admin', (req, res) => {
+  if (!isReceptionRequest(req)) return refuseNonReception(res);
+  const page = ['admin.html', 'index.html'].map(name => path.join(distPath, name)).find(file => fs.existsSync(file));
+  if (!page) return res.status(404).type('text/plain').send('The admin page has not been built yet (run npm run build).');
+  res.sendFile(page);
 });
 
 // Dedicated route for Waiter App PWA

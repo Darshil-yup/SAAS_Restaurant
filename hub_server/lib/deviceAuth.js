@@ -198,7 +198,7 @@ function isLocalHostname(hostname) {
 }
 
 /**
- * Menu and table editing is limited to the reception laptop. Enrolled waiter
+ * Is this request from the reception laptop itself? Menu and table editing is limited to it. Enrolled waiter
  * handsets hold a 30-day token, so a token is deliberately NOT enough here.
  *
  * Arriving from loopback is not enough either: any web page open in a browser on that same
@@ -213,13 +213,18 @@ function isLocalHostname(hostname) {
  * (http://localhost:4000, http://<LAN-IP>:4000). A machine-name URL such as
  * http://reception-pc:4000 is refused, as is any page served by another host.
  */
-export function requireReception(req, res, next) {
+export function isReceptionRequest(req) {
   const host = hostnameOf(req.headers?.host ?? '', { withScheme: false });
   const origin = req.headers?.origin;
   const addressedToThisMachine = isLocalHostname(host) &&
     (origin === undefined || isLocalHostname(hostnameOf(origin, { withScheme: true })));
 
-  if (isLoopback(req) && addressedToThisMachine) return next();
+  return isLoopback(req) && addressedToThisMachine;
+}
+
+/** Express guard for the /admin JSON API: the same decision as isReceptionRequest, answered as 403 RECEPTION_ONLY. */
+export function requireReception(req, res, next) {
+  if (isReceptionRequest(req)) return next();
 
   return res.status(403).json({
     success: false,
