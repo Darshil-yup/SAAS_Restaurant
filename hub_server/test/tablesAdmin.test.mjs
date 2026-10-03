@@ -83,6 +83,28 @@ test('invalid sections, ids and capacities are rejected with field paths', () =>
   assert.equal(applyLayout(current(), null).code, 'INVALID_LAYOUT');
 });
 
+test('the section name "All" is reserved for the floor filter, in any case', () => {
+  // The floor grid puts its own "All" chip first; a section with that name would be a second,
+  // indistinguishable chip, and its tables could never be isolated.
+  for (const name of ['All', 'all', 'ALL', ' All ']) {
+    const r = applyLayout(current(), { sections: [name], tables: [] });
+    assert.equal(r.ok, false, `section ${JSON.stringify(name)} must be refused`);
+    assert.equal(r.status, 400);
+    assert.equal(r.code, 'INVALID_LAYOUT');
+    assert.equal(r.errors[0].field, 'sections[0]');
+  }
+
+  const second = applyLayout(current(), { sections: ['Main Hall', 'All'], tables: [] });
+  assert.equal(second.ok, false);
+  assert.equal(second.code, 'INVALID_LAYOUT');
+  assert.equal(second.errors[0].field, 'sections[1]', 'reported at its own position');
+
+  // Only the whole word is reserved.
+  const fine = applyLayout(current(), { sections: ['All Day Cafe', 'Allergy Free'], tables: [] });
+  assert.equal(fine.ok, true);
+  assert.deepEqual(fine.data.sections, ['All Day Cafe', 'Allergy Free']);
+});
+
 test('a table with an open bill cannot be renamed or deleted, but can change seats and section', () => {
   const open = new Set(['1']);
 

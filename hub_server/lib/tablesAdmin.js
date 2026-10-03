@@ -26,6 +26,10 @@ export function applyLayout(current, input, openTableIds = new Set()) {
     const name = typeof s === 'string' ? s.trim() : '';
     if (!name || name.length > TABLE_LIMITS.section) {
       errors.push({ field: `sections[${i}]`, message: `section name is required (1–${TABLE_LIMITS.section} characters)` });
+    } else if (norm(name) === 'all') {
+      // The floor grid puts its own "All" filter chip first; a section called that would be a
+      // second, indistinguishable chip whose tables could never be isolated.
+      errors.push({ field: `sections[${i}]`, message: `"${name}" is reserved for the floor filter; choose another section name` });
     } else if (sections.some(x => norm(x) === norm(name))) {
       errors.push({ field: `sections[${i}]`, message: `section "${name}" is listed twice` });
     } else {
