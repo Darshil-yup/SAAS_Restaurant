@@ -25,12 +25,22 @@ export const FloorGridSkeleton = () => (
   </div>
 );
 
-export const FloorGrid = ({ selectedTable, onSelectTable, tables: propTables, onClearTableBill, isLoading = false, drafts = {}, onOpenPairing, hubConnected, connStatus, isEnrolled }) => {
+export const FloorGrid = ({ selectedTable, onSelectTable, tables: propTables, sections: propSections, onClearTableBill, isLoading = false, drafts = {}, onOpenPairing, hubConnected, connStatus, isEnrolled }) => {
   const contextPos = usePos() || {};
   const tables = propTables || contextPos.tables || [];
   const clearTableBill = onClearTableBill || contextPos.clearTableBill;
   const [selectedSection, setSelectedSection] = React.useState('All');
-  const sections = ['All', 'Main Hall', 'AC Room', 'Family Room'];
+  // Section chips follow what the hub reports (reception can add or rename
+  // sections); fall back to the sections the tables themselves use.
+  const sectionNames = propSections && propSections.length > 0
+    ? propSections
+    : Array.from(new Set(tables.map(t => t.section).filter(Boolean)));
+  const sections = ['All', ...sectionNames];
+
+  // A section renamed or removed while selected would leave an empty grid.
+  React.useEffect(() => {
+    if (selectedSection !== 'All' && !sectionNames.includes(selectedSection)) setSelectedSection('All');
+  }, [sectionNames.join('|'), selectedSection]);
   const shown = selectedSection === 'All' ? tables : tables.filter(t => t.section === selectedSection);
 
   const [clearedTableIds, setClearedTableIds] = React.useState({});

@@ -79,6 +79,7 @@ export const WaiterApp = () => {
   };
 
   const [liveTables, setLiveTables] = useState([]);
+  const [liveSections, setLiveSections] = useState([]);
   const [activeOrders, setActiveOrders] = useState([]);
   const wasConnectedRef = useRef(false);
   const isGracePeriodRef = useRef(true);
@@ -108,6 +109,7 @@ export const WaiterApp = () => {
         const data = await tablesRes.json();
         if (data.uninitialized) setHubMenuUninitialized(true);
         if (data.tables && Array.isArray(data.tables)) setLiveTables(data.tables);
+        if (Array.isArray(data.sections)) setLiveSections(data.sections);
       }
 
       if (ordersRes && ordersRes.ok) {
@@ -730,7 +732,7 @@ export const WaiterApp = () => {
               </p>
               <FloorGrid
                 selectedTable={selectedTableId} onSelectTable={setSelectedTableId}
-                tables={liveTables} onClearTableBill={handleClearTableBill}
+                tables={liveTables} sections={liveSections} onClearTableBill={handleClearTableBill}
                 isLoading={connStatus === 'connecting' && liveTables.length === 0}
                 drafts={drafts} onOpenPairing={openPairing} hubConnected={hubConnected}
                 connStatus={connStatus}
