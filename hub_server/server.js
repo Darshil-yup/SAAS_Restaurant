@@ -622,10 +622,11 @@ app.put('/admin/tables/layout', requireReception, async (req, res) => {
   res.json({ success: true, revision: result.data.revision, tables: result.data.tables, sections: result.data.sections });
 });
 
-// Body-parser failures (oversize, malformed JSON) are raised by the parsers mounted at the top
-// of the stack, before any admin route runs. Answer them in the same { success, error, code }
-// shape as every other admin failure instead of Express's HTML page, which carries a stack
-// trace and install paths. Scoped to /admin so the other routes behave exactly as before.
+// Every failure under /admin answers in the same { success, error, code } shape, never in
+// Express's HTML page, which carries a stack trace and install paths. That covers the body-parser
+// failures (oversize, malformed JSON), which are raised by the parsers mounted at the top of the
+// stack before any admin route runs, and anything an admin route throws itself. Scoped to /admin
+// so the other routes behave exactly as before.
 app.use('/admin', (err, req, res, next) => {
   if (res.headersSent) return next(err);
   if (err?.type === 'entity.too.large') {
@@ -634,7 +635,13 @@ app.use('/admin', (err, req, res, next) => {
   if (err?.type === 'entity.parse.failed') {
     return res.status(400).json({ success: false, error: 'Request body is not valid JSON.', code: 'INVALID_JSON' });
   }
-  return next(err);
+  // The cause stays in the hub's log; the client only learns that, and roughly why, it failed.
+  console.error(`❌ ${req.method} ${req.originalUrl} failed:`, err);
+  const status = [err?.status, err?.statusCode].find(s => Number.isInteger(s) && s >= 400 && s < 500);
+  if (status) {
+    return res.status(status).json({ success: false, error: 'The request could not be processed.', code: 'BAD_REQUEST' });
+  }
+  return res.status(500).json({ success: false, error: 'The hub could not complete this request.', code: 'INTERNAL_ERROR' });
 });
 
 function buildPreviewForTable(tableId, pairing, adjustments) {

@@ -412,6 +412,23 @@ test('malformed JSON on an admin route gets a JSON 400 INVALID_JSON; routes outs
   assert.doesNotMatch(other.headers.get('content-type') || '', /application\/json/, 'the /admin handler must not change other routes');
 });
 
+test('any other failure on an admin route is a JSON error too, never an HTML page with a stack trace', async () => {
+  // Valid JSON that makes the route itself throw (outside updateCatalog): String({ toString: 1 }) is a TypeError.
+  const rev = await menuRev();
+  const hostile = '{"rows":[{"name":{"toString":1},"category":"Starters","price":"10","veg":"yes"}]}';
+  await assertJsonFailure(await rawCall(rec, '/admin/menu/import/preview', { body: hostile }), 500, 'INTERNAL_ERROR');
+
+  // An error that carries its own 4xx status keeps it: an unsupported charset is the client's problem.
+  const latin1 = await fetch(`${rec.base}/admin/menu/items`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=latin1' },
+    body: JSON.stringify({ base_revision: rev, item: { name: 'X', category: 'Starters', price: 1, isVeg: true } })
+  });
+  await assertJsonFailure(latin1, 415, 'BAD_REQUEST');
+
+  assert.equal(await menuRev(), rev, 'a failed request must not change anything');
+});
+
 test('a non-reception host gets 403 RECEPTION_ONLY before an oversized import body is parsed', async () => {
   const body = { base_revision: 0, rows: [], pad: 'x'.repeat(2 * 1024 * 1024 + 4096) };
   for (const p of ['/admin/menu/import/preview', '/admin/menu/import/commit']) {
