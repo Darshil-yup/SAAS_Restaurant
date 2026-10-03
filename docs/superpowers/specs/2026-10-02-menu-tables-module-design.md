@@ -41,11 +41,11 @@ Let a restaurant manage its own menu and table layout from the reception laptop:
 
 `restaurantCache` stays the read facade, so `/menu`, `/tables/layout` and the WebSocket `CONNECTED` handshake are unchanged. Writes go through new validated paths into the same cache files.
 
-**Shared normaliser.** The inline per-item normalisation in `fetchMenuFromSupabase` (variants, modifier groups, day-parts, station) moves to `hub_server/lib/menuNormalize.js`. The cloud seed, the editor routes and the importer all use it, so a malformed row cannot reach the pricer from any source. A golden test pins its output to the current behaviour.
+**Shared normaliser.** The inline per-item normalisation in `fetchMenuFromSupabase` (variants, modifier groups, day-parts, station) moves to `hub_server/lib/menuNormalize.js`. The cloud seed and the editor routes use it (the importer validates rows with its own strict parser), so a malformed row cannot reach the pricer from any source. Golden tests pin its output to the previous behaviour; equivalence with the old inline mapper on the demo seed plus 50,000 random rows was also checked once by a differential run.
 
 **Authority and revisions.** Each cache file gains an integer `revision`, bumped on every local write. While `revision > 0`, boot sync, reconnect and realtime events no longer overwrite that catalog. Every write carries `base_revision`; a stale value returns 409. Each write also keeps a rolling backup (last 10 per catalog) in `hub_server/data/backups/`, which is added to `.gitignore`.
 
-**Access.** New `requireReception` guard: loopback / trusted local address only. Enrolled handsets get 403 `RECEPTION_ONLY`. Under `HUB_TRUST_LOOPBACK=false` no one qualifies, so tests spawn the hub in both modes. The `/admin` page route returns a plain "Reception only" 403 to non-local callers.
+**Access.** New `requireReception` guard: loopback / trusted local address only. Enrolled handsets get 403 `RECEPTION_ONLY`. Under `HUB_TRUST_LOOPBACK=false` no one qualifies, so tests spawn the hub in both modes. The `/admin` page route (Phase 2) returns a plain "Reception only" 403 to non-local callers.
 
 **Routes** (all new):
 
@@ -117,7 +117,7 @@ Orders re-price from the hub menu at `POST /orders`, so edits apply to the next 
 
 ## 4. Failure handling
 
-- Errors use the existing `{ success:false, error, code }` shape: `RECEPTION_ONLY` (403), `STALE_REVISION` (409), `TABLE_HAS_OPEN_BILL` (409), `INVALID_ROWS` (400, with row details), `NO_VALID_ROWS` (400, a replace or merge import that leaves no valid row, so nothing is written), oversize bodies 413 `PAYLOAD_TOO_LARGE` and malformed JSON 400 `INVALID_JSON` (both answered as JSON for `/admin` routes only). `base_revision` is strict: body routes take it as a JSON number and DELETE routes as a digits-only query string; anything else is 400 `BASE_REVISION_REQUIRED`.
+- Errors use the existing `{ success:false, error, code }` shape: `RECEPTION_ONLY` (403), `STALE_REVISION` (409), `TABLE_HAS_OPEN_BILL` (409), `INVALID_ROWS` (400, with row details), `NO_VALID_ROWS` (400, a replace or merge import that leaves no valid row, so nothing is written), oversize bodies 413 `PAYLOAD_TOO_LARGE` and malformed JSON 400 `INVALID_JSON` (both answered as JSON for `/admin` routes only). `base_revision` is strict: body routes take it as a JSON integer and DELETE routes as a digits-only query string; anything else is 400 `BASE_REVISION_REQUIRED`.
 - Admin writes go to a temp file then rename, and the in-memory cache is swapped only after success. (Today `saveMenuToDisk` mutates memory before the disk write.) A failure returns 500 `WRITE_FAILED` and leaves state unchanged.
 - All catalog writes are serialised through a single promise chain so read-modify-write cannot interleave.
 - A cloud-sync failure never blocks or rolls back an edit.
@@ -126,7 +126,7 @@ Orders re-price from the hub menu at `POST /orders`, so edits apply to the next 
 
 Hub `node --test` (existing harness, temp `HUB_DATA_DIR`):
 
-- normaliser golden test (output unchanged for the demo seed);
+- normaliser golden tests (hand-built hostile and legacy rows; seed equivalence was verified once by a differential run, not by a committed test);
 - item CRUD, category rename/reorder/delete rules, 409 on stale revision, backup rotation;
 - import preview and commit: merge, replace, field diffs, absent-column and blank-cell preservation, variant id retention, required `veg`, row errors, 2 MB body accepted;
 - table rules: unique names, open-bill lock, last-table delete does not resurrect demo tables, id counter never reuses;
