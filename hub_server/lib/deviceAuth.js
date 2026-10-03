@@ -179,3 +179,17 @@ export function requireDevice(req, res, next) {
     code: 'DEVICE_UNAUTHORISED'
   });
 }
+
+/**
+ * Menu and table editing is limited to the reception laptop. Enrolled waiter
+ * handsets hold a 30-day token, so a token is deliberately NOT enough here.
+ */
+export function requireReception(req, res, next) {
+  if (isLoopback(req)) return next();
+
+  return res.status(403).json({
+    success: false,
+    error: 'Menu and table editing is only available on the reception laptop.',
+    code: 'RECEPTION_ONLY'
+  });
+}

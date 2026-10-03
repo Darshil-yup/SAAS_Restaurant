@@ -21,10 +21,13 @@ import { invoiceStore } from './lib/invoiceStore.js';
 import { renderKot, renderReceipt, sendToPrinter } from './lib/printer.js';
 import { groupTicketByStation } from './lib/kotRouting.js';
 import { waiterStore } from './lib/waiterStore.js';
+import { addItem, updateItem, deleteItem, addCategory, renameCategory, reorderCategories, deleteCategory } from './lib/menuAdmin.js';
+import { previewImport, applyImport } from './lib/menuImport.js';
+import { applyLayout } from './lib/tablesAdmin.js';
 import { crashReporter, attachHubProcessHandlers } from './lib/crashReporter.js';
 
 attachHubProcessHandlers();
-import { deviceAuth, requireDevice, extractToken, isLoopback, trustLocalAddress } from './lib/deviceAuth.js';
+import { deviceAuth, requireDevice, requireReception, extractToken, isLoopback, trustLocalAddress } from './lib/deviceAuth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -50,6 +53,11 @@ app.use(cors({
   },
   credentials: true
 }));
+// Menu imports can carry up to 2000 rows with modifiers. Give just those routes a
+// bigger body limit. This MUST be mounted before the global parser: the global one
+// would reject anything over 256 KB first, and a body that is already parsed is
+// skipped by the later parser.
+app.use('/admin/menu/import', express.json({ limit: '2mb' }));
 app.use(express.json({ limit: '256kb' }));
 
 // -------------------------------------------------------------
@@ -461,7 +469,10 @@ const MASTER_TABLES = [
 function getLiveTables(restaurantId) {
   const activeTickets = ticketStore.getActiveTickets(restaurantId);
   const layoutData = restaurantCache.getTablesCache(restaurantId);
-  const baseTables = (layoutData && layoutData.tables && layoutData.tables.length > 0) ? layoutData.tables : MASTER_TABLES;
+  // MASTER_TABLES is only the demo fallback for a hub that has never loaded a
+  // layout. An initialised hub with zero tables (the restaurant deleted them all)
+  // must stay empty rather than resurrect the demo floor.
+  const baseTables = layoutData.uninitialized ? MASTER_TABLES : (layoutData.tables || []);
 
   return baseTables.map(table => {
     const tableTickets = activeTickets.filter(t => 
@@ -502,8 +513,105 @@ app.get('/tables', requireDevice, (req, res) => {
     restaurant_id: pairing.restaurant_id,
     uninitialized: layout.uninitialized || false,
     count: liveTables.length,
+    sections: layout.sections || [],
     tables: liveTables
   });
+});
+
+// -------------------------------------------------------------
+// Admin catalog editing — reception laptop only (requireReception).
+// Every write carries `base_revision` (JSON body, or query string for DELETE).
+// -------------------------------------------------------------
+function readBaseRevision(req) {
+  const raw = req.body?.base_revision ?? req.query?.base_revision;
+  return raw === undefined || raw === '' ? NaN : Number(raw);
+}
+
+function sendCatalogFailure(res, result) {
+  return res.status(result.status).json({
+    success: false,
+    error: result.error,
+    code: result.code,
+    ...(result.errors ? { errors: result.errors } : {}),
+    ...(result.details ? { details: result.details } : {}),
+    ...(result.current_revision !== undefined ? { current_revision: result.current_revision } : {})
+  });
+}
+
+async function commitMenu(req, res, mutator, { status = 200 } = {}) {
+  const result = await restaurantCache.updateCatalog('menu', readBaseRevision(req), mutator);
+  if (!result.ok) return sendCatalogFailure(res, result);
+
+  const pairing = hubConfig.getPairingInfo();
+  broadcast('menu_updated', restaurantCache.getMenuCache(pairing.restaurant_id));
+  return res.status(status).json({ success: true, revision: result.data.revision, ...(result.meta || {}) });
+}
+
+app.post('/admin/menu/items', requireReception, (req, res) =>
+  commitMenu(req, res, menu => addItem(menu, req.body?.item), { status: 201 }));
+
+app.put('/admin/menu/items/:id', requireReception, (req, res) =>
+  commitMenu(req, res, menu => updateItem(menu, req.params.id, req.body?.item)));
+
+app.delete('/admin/menu/items/:id', requireReception, (req, res) =>
+  commitMenu(req, res, menu => deleteItem(menu, req.params.id)));
+
+app.post('/admin/menu/categories', requireReception, (req, res) =>
+  commitMenu(req, res, menu => addCategory(menu, req.body?.name), { status: 201 }));
+
+// Registered before any `/:name` style route would be: "order" is a path, not a category.
+app.put('/admin/menu/categories/order', requireReception, (req, res) =>
+  commitMenu(req, res, menu => reorderCategories(menu, req.body?.names)));
+
+app.put('/admin/menu/categories', requireReception, (req, res) =>
+  commitMenu(req, res, menu => renameCategory(menu, req.body?.from, req.body?.to)));
+
+app.delete('/admin/menu/categories', requireReception, (req, res) =>
+  commitMenu(req, res, menu => deleteCategory(menu, req.query?.name)));
+
+app.post('/admin/menu/import/preview', requireReception, (req, res) => {
+  const menu = restaurantCache.getMenuCache();
+  if (menu.uninitialized) {
+    return res.status(409).json({ success: false, error: menu.message, code: 'HUB_UNINITIALIZED' });
+  }
+  const mode = req.body?.mode === 'replace' ? 'replace' : 'merge';
+  const result = previewImport(menu, req.body?.rows, { mode });
+  if (!result.ok) return sendCatalogFailure(res, result);
+
+  res.json({
+    success: true,
+    revision: menu.revision,
+    counts: result.counts,
+    rows: result.rows.map(({ item, ...row }) => row)
+  });
+});
+
+app.post('/admin/menu/import/commit', requireReception, (req, res) => {
+  const mode = req.body?.mode === 'replace' ? 'replace' : 'merge';
+  if (mode === 'replace' && req.body?.confirm_replace !== true) {
+    return res.status(400).json({
+      success: false,
+      error: 'Replacing the whole menu requires confirm_replace: true.',
+      code: 'CONFIRM_REQUIRED'
+    });
+  }
+  return commitMenu(req, res, menu =>
+    applyImport(menu, req.body?.rows, { mode, skipInvalid: req.body?.skip_invalid === true }));
+});
+
+app.put('/admin/tables/layout', requireReception, async (req, res) => {
+  const pairing = hubConfig.getPairingInfo();
+  // Evaluated inside the mutator (same tick as applyLayout) so it reflects open bills when the edit actually runs in the write chain.
+  const openTableIds = () => new Set(
+    getLiveTables(pairing.restaurant_id).filter(t => t.status !== 'available').map(t => String(t.id))
+  );
+
+  const result = await restaurantCache.updateCatalog('tables', readBaseRevision(req),
+    layout => applyLayout(layout, req.body, openTableIds()));
+  if (!result.ok) return sendCatalogFailure(res, result);
+
+  broadcast('tables_updated', restaurantCache.getTablesCache(pairing.restaurant_id));
+  res.json({ success: true, revision: result.data.revision, tables: result.data.tables, sections: result.data.sections });
 });
 
 function buildPreviewForTable(tableId, pairing, adjustments) {
