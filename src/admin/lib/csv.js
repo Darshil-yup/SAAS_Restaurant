@@ -135,5 +135,5 @@ export function menuToCsv(menu) {
       variants
     ].map(csvField).join(','));
   }
-  return '﻿' + lines.join('\r\n') + '\r\n';
+  return '\uFEFF' + lines.join('\r\n') + '\r\n';
 }

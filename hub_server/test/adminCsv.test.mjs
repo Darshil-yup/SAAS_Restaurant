@@ -31,7 +31,7 @@ test('parseCsv: empty fields, blank lines (they keep their place) and the empty 
 });
 
 test('parseCsv strips a UTF-8 byte order mark', () => {
-  assert.deepEqual(parseCsv('﻿name,price\r\nDal,190\r\n'), [['name', 'price'], ['Dal', '190']]);
+  assert.deepEqual(parseCsv('\uFEFFname,price\r\nDal,190\r\n'), [['name', 'price'], ['Dal', '190']]);
 });
 
 test('parseCsv is lenient about stray quotes instead of dropping data', () => {
@@ -100,7 +100,7 @@ test('rowsFromTable on an empty, blank or header-only table', () => {
 // ---------------------------------------------------------------- csvToRows
 
 test('csvToRows reads a CSV file the way the importer expects it', () => {
-  const text = '﻿Name,Category,Price\r\n"Paneer, Tikka",Starters,230\r\n\r\nDal,Main,"12.50"\r\n';
+  const text = '\uFEFFName,Category,Price\r\n"Paneer, Tikka",Starters,230\r\n\r\nDal,Main,"12.50"\r\n';
   assert.deepEqual(csvToRows(text), {
     columns: ['name', 'category', 'price'],
     rows: [
@@ -118,12 +118,12 @@ test('MENU_COLUMNS is the importer\'s column order', () => {
 
 test('menuToCsv writes a BOM, a header and one CRLF-terminated row per item', () => {
   const csv = menuToCsv({ categories: ['Main'], items: [{ id: 'm1', name: 'Dal Tadka', category: 'Main', price: 190, isVeg: true, available: true }] });
-  assert.equal(csv, '﻿id,name,category,price,veg,available,station,variants\r\nm1,Dal Tadka,Main,190,yes,yes,,\r\n');
+  assert.equal(csv, '\uFEFFid,name,category,price,veg,available,station,variants\r\nm1,Dal Tadka,Main,190,yes,yes,,\r\n');
 });
 
 test('menuToCsv of an empty menu is the header alone', () => {
-  assert.equal(menuToCsv({ categories: [], items: [] }), '﻿id,name,category,price,veg,available,station,variants\r\n');
-  assert.equal(menuToCsv(undefined), '﻿id,name,category,price,veg,available,station,variants\r\n');
+  assert.equal(menuToCsv({ categories: [], items: [] }), '\uFEFFid,name,category,price,veg,available,station,variants\r\n');
+  assert.equal(menuToCsv(undefined), '\uFEFFid,name,category,price,veg,available,station,variants\r\n');
 });
 
 test('menuToCsv: veg and available as yes/no, station only when it is a known one, variants as Label:price|Label:price', () => {
