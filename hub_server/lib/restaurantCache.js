@@ -224,11 +224,18 @@ class RestaurantCache {
 
   /**
    * Once a catalog has been edited on the hub (revision > 0) it is authoritative:
-   * boot sync, reconnect and realtime events must not overwrite it.
+   * boot sync, reconnect and realtime events must not overwrite it. That holds only for
+   * the restaurant it was edited for. A catalog recording a different restaurant_id than
+   * the one being pulled belongs to an earlier pairing (POST /pair), and keeping it would
+   * serve that restaurant's menu and prices to this one. A catalog with no restaurant_id
+   * (legacy) counts as this restaurant's, and so does any pull whose restaurant is unknown:
+   * an edit is only ever replaced when the pulled data positively belongs to someone else.
    */
-  isHubAuthoritative(kind) {
+  isHubAuthoritative(kind, restaurantId) {
     const cache = kind === 'menu' ? this.menuCache : this.tablesCache;
-    return (cache?.revision || 0) > 0;
+    if ((cache?.revision || 0) <= 0) return false;
+    const owner = cache.restaurant_id;
+    return !owner || !restaurantId || String(owner) === String(restaurantId);
   }
 
   /**
@@ -302,7 +309,21 @@ class RestaurantCache {
    */
   applyPulledCatalog(kind, fresh) {
     const run = this._writeChain.then(async () => {
-      if (this.isHubAuthoritative(kind)) return false;
+      if (this.isHubAuthoritative(kind, fresh?.restaurant_id)) return false;
+
+      // Past the check above, a catalog that was edited on the hub is about to be replaced
+      // because it belongs to another restaurant. Keep a copy first; if that is not possible,
+      // leave it alone rather than destroy the only copy of someone's edits.
+      const cache = kind === 'menu' ? this.menuCache : this.tablesCache;
+      if ((cache?.revision || 0) > 0) {
+        try {
+          await this._backupFile(CATALOG_FILES[kind]);
+        } catch (err) {
+          console.warn(`⚠️ Not replacing the ${kind} catalog edited on this hub for another restaurant: its backup failed (${err.message}).`);
+          return false;
+        }
+      }
+
       if (kind === 'menu') await this.saveMenuToDisk(fresh);
       else await this.saveTablesToDisk(fresh);
       return true;
@@ -399,8 +420,8 @@ class RestaurantCache {
 
     if (isOnline) {
       console.log('🌐 Hub is ONLINE at boot. Synchronizing menu & table layout snapshot from Supabase...');
-      const freshMenu = this.isHubAuthoritative('menu') ? null : await this.fetchMenuFromSupabase(restaurantId);
-      const freshTables = this.isHubAuthoritative('tables') ? null : await this.fetchTablesFromSupabase(restaurantId);
+      const freshMenu = this.isHubAuthoritative('menu', restaurantId) ? null : await this.fetchMenuFromSupabase(restaurantId);
+      const freshTables = this.isHubAuthoritative('tables', restaurantId) ? null : await this.fetchTablesFromSupabase(restaurantId);
 
       if (freshMenu) {
         const applied = await this.applyPulledCatalog('menu', freshMenu);
@@ -434,7 +455,7 @@ class RestaurantCache {
     try {
       this.realtimeChannel = supabase.channel(`hub-cache-${restaurantId}`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_items' }, async () => {
-          if (this.isHubAuthoritative('menu')) return;
+          if (this.isHubAuthoritative('menu', restaurantId)) return;
           console.log('🔔 Supabase Realtime: menu_items change detected! Refreshing local cache & broadcasting live...');
           const fresh = await this.fetchMenuFromSupabase(restaurantId);
           if (fresh) {
@@ -443,7 +464,7 @@ class RestaurantCache {
           }
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_categories' }, async () => {
-          if (this.isHubAuthoritative('menu')) return;
+          if (this.isHubAuthoritative('menu', restaurantId)) return;
           console.log('🔔 Supabase Realtime: menu_categories change detected! Refreshing local cache & broadcasting live...');
           const fresh = await this.fetchMenuFromSupabase(restaurantId);
           if (fresh) {
@@ -452,7 +473,7 @@ class RestaurantCache {
           }
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'tables' }, async () => {
-          if (this.isHubAuthoritative('tables')) return;
+          if (this.isHubAuthoritative('tables', restaurantId)) return;
           console.log('🔔 Supabase Realtime: tables change detected! Refreshing local cache & broadcasting live...');
           const fresh = await this.fetchTablesFromSupabase(restaurantId);
           if (fresh) {
@@ -471,8 +492,8 @@ class RestaurantCache {
   async handleReconnection(restaurantId, broadcastFn) {
     console.log(`🌐 Hub reconnected online! Fetching latest menu & table snapshot from Supabase...`);
     try {
-      const freshMenu = this.isHubAuthoritative('menu') ? null : await this.fetchMenuFromSupabase(restaurantId);
-      const freshTables = this.isHubAuthoritative('tables') ? null : await this.fetchTablesFromSupabase(restaurantId);
+      const freshMenu = this.isHubAuthoritative('menu', restaurantId) ? null : await this.fetchMenuFromSupabase(restaurantId);
+      const freshTables = this.isHubAuthoritative('tables', restaurantId) ? null : await this.fetchTablesFromSupabase(restaurantId);
 
       if (freshMenu) {
         const applied = await this.applyPulledCatalog('menu', freshMenu);

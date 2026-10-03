@@ -393,3 +393,115 @@ for (const kind of ['menu', 'tables']) {
     }
   });
 }
+
+// ---------------------------------------------------------------------------
+// Authority belongs to a restaurant: a hub edit made while paired to one restaurant must not
+// keep a different restaurant's catalog from being pulled after the hub is re-paired.
+// ---------------------------------------------------------------------------
+
+const RID_B = '22222222-2222-2222-2222-222222222222';
+// What is on disk after the hub was edited (revision 2) while paired to `owner`, as a restart loads it.
+// `owner: null` is a legacy catalog that never recorded a restaurant_id.
+function seedEdited(kind, owner = RID) {
+  const doc = { ...(kind === 'menu' ? MENU() : TABLES()), revision: 2, source: 'hub' };
+  if (owner === null) delete doc.restaurant_id; else doc.restaurant_id = owner;
+  fs.writeFileSync(path.join(dir, RACE[kind].file), JSON.stringify(doc));
+  cache.loadFromDisk();
+}
+const backupsOf = kind => fs.existsSync(path.join(dir, 'backups'))
+  ? fs.readdirSync(path.join(dir, 'backups')).filter(f => f.startsWith(`${kind}_cache.`)) : [];
+
+test('hub authority is scoped to the restaurant the catalog was edited for', () => {
+  for (const kind of ['menu', 'tables']) {
+    reset();
+    assert.equal(cache.isHubAuthoritative(kind, RID), false, `${kind}: revision 0 is never authoritative`);
+
+    seedEdited(kind, RID);
+    assert.equal(cache.isHubAuthoritative(kind, RID), true, `${kind}: same restaurant`);
+    assert.equal(cache.isHubAuthoritative(kind, RID_B), false, `${kind}: a different restaurant`);
+    assert.equal(cache.isHubAuthoritative(kind), true, `${kind}: an unknown restaurant never demotes an edit`);
+
+    seedEdited(kind, null);
+    assert.equal(cache.isHubAuthoritative(kind, RID_B), true, `${kind}: a catalog with no restaurant_id (legacy) still counts`);
+  }
+});
+
+for (const kind of ['menu', 'tables']) {
+  test(`a ${kind} edited for one restaurant is backed up and replaced once the hub is paired to another`, async () => {
+    const r = RACE[kind];
+    reset();
+    seedEdited(kind, RID);
+    const broadcasts = [];
+    const asked = [];
+    await withStubs(cache, {
+      [r.fetcher]: async id => { asked.push(id); return { ...r.cloud(), restaurant_id: RID_B }; },
+      [kind === 'menu' ? 'fetchTablesFromSupabase' : 'fetchMenuFromSupabase']: async () => null,
+      subscribeRealtime: () => {}
+    }, () => cache.handleReconnection(RID_B, type => broadcasts.push(type)));
+
+    assert.deepEqual(asked, [RID_B], 'the other restaurant is pulled, not skipped');
+    const now = r.get();
+    assert.equal(now.restaurant_id, RID_B);
+    assert.equal(now.revision, 0, 'a pulled catalog starts again at revision 0');
+    assert.equal(readJson(r.file).restaurant_id, RID_B);
+    assert.equal(readJson(r.file).revision, undefined);
+    assert.deepEqual(broadcasts, [r.event]);
+
+    const backups = backupsOf(kind);
+    assert.equal(backups.length, 1, 'the replaced catalog was backed up first');
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'backups', backups[0]), 'utf-8'));
+    assert.equal(saved.restaurant_id, RID);
+    assert.equal(saved.revision, 2);
+  });
+}
+
+test('if the backup of the other restaurant\'s catalog fails, the old catalog stays and a warning is logged', async () => {
+  reset();
+  seedEdited('menu', RID);
+  const warnings = [];
+  let backupAttempts = 0;
+  let applied;
+  await withStubs(console, { warn: (...args) => warnings.push(args.join(' ')) }, () =>
+    withStubs(cache, { _backupFile: async () => { backupAttempts++; throw new Error('disk full'); } }, async () => {
+      applied = await cache.applyPulledCatalog('menu', { ...CLOUD_MENU(), restaurant_id: RID_B });
+    }));
+
+  assert.equal(applied, false);
+  assert.equal(backupAttempts, 1);
+  assert.ok(warnings.some(w => w.includes('disk full')), `a warning naming the cause was expected, got: ${JSON.stringify(warnings)}`);
+  assert.equal(cache.getMenuCache().restaurant_id, RID);
+  assert.equal(cache.getMenuCache().revision, 2);
+  assert.equal(readJson('menu_cache.json').revision, 2, 'nor was the file on disk touched');
+  assert.equal(readJson('menu_cache.json').restaurant_id, RID);
+});
+
+test('realtime events pull a different restaurant\'s catalog over a hub edit too', { timeout: 10000 }, async () => {
+  const { supabase } = await import('../lib/supabaseClient.js');
+  const realSubscribe = Object.getPrototypeOf(cache).subscribeRealtime;
+
+  for (const [table, kind] of [['menu_items', 'menu'], ['menu_categories', 'menu'], ['tables', 'tables']]) {
+    const r = RACE[kind];
+    reset();
+    seedEdited(kind, RID);
+    const handlers = {};
+    const channel = { on(_evt, filter, handler) { handlers[filter.table] = handler; return channel; }, subscribe() { return channel; } };
+    const broadcasts = [];
+    try {
+      await withStubs(supabase, { channel: () => channel, removeChannel: () => {} }, () =>
+        withStubs(cache, {
+          subscribeRealtime: realSubscribe,
+          [r.fetcher]: async () => ({ ...r.cloud(), restaurant_id: RID_B })
+        }, async () => {
+          cache.subscribeRealtime(RID_B, type => broadcasts.push(type));
+          await handlers[table]();
+        }));
+    } finally {
+      cache.realtimeChannel = null;
+    }
+
+    assert.equal(r.get().restaurant_id, RID_B, `${table}: the other restaurant's catalog is in place`);
+    assert.equal(r.get().revision, 0, `${table}: revision`);
+    assert.deepEqual(broadcasts, [r.event], `${table}: broadcast`);
+    assert.equal(backupsOf(kind).length, 1, `${table}: the replaced catalog was backed up`);
+  }
+});
