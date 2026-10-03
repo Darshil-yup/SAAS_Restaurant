@@ -1,5 +1,7 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import WebSocket from 'ws';
 import { startHub, call, RESTAURANT_ID } from './helpers/spawnHub.mjs';
 
@@ -349,4 +351,151 @@ test('enrolled handsets can read the menu but get 403 RECEPTION_ONLY on every ad
 
   const unchanged = await json(await call(handset, '/menu', { token }));
   assert.equal(unchanged.revision, 0, 'a refused edit must not change anything');
+});
+
+// ---------------------------------------------------------------- body errors, guard order, strict revisions
+
+// Same as `call`, but the body goes out exactly as given, so it can be malformed JSON.
+const rawCall = (hub, pathname, { method = 'POST', body, token } = {}) => fetch(`${hub.base}${pathname}`, {
+  method,
+  headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  body
+});
+
+// A body-parser failure must look like every other admin failure: JSON { success, error, code },
+// never Express's HTML error page, which carries a stack trace with install paths.
+const assertJsonFailure = async (res, status, code) => {
+  const text = await res.text();
+  assert.equal(res.status, status, `expected ${status}, got ${res.status}: ${text.slice(0, 120)}`);
+  assert.match(res.headers.get('content-type') || '', /application\/json/, 'must be JSON, not an HTML error page');
+  const body = JSON.parse(text);
+  assert.deepEqual(Object.keys(body).sort(), ['code', 'error', 'success']);
+  assert.equal(body.success, false);
+  assert.equal(body.code, code);
+  assert.doesNotMatch(text, /node_modules|\.js:\d+|\bat \S+ \(|SyntaxError|[A-Za-z]:\\/, 'no stack trace or file paths');
+};
+
+test('an import body over 2 MB gets a JSON 413 PAYLOAD_TOO_LARGE instead of an HTML stack trace', async () => {
+  const rev = await menuRev();
+  const body = { base_revision: rev, rows: [], pad: 'x'.repeat(2 * 1024 * 1024 + 4096) };
+  for (const p of ['/admin/menu/import/commit', '/admin/menu/import/preview']) {
+    await assertJsonFailure(await call(rec, p, { method: 'POST', body }), 413, 'PAYLOAD_TOO_LARGE');
+  }
+  assert.equal(await menuRev(), rev, 'a refused body must not change anything');
+});
+
+test('a body over the global 256 KB limit on an admin route gets the same JSON 413', async () => {
+  const rev = await menuRev();
+  const pad = 'x'.repeat(300 * 1024);
+  await assertJsonFailure(
+    await call(rec, '/admin/menu/items', { method: 'POST', body: { base_revision: rev, item: { name: pad, category: 'Starters', price: 1, isVeg: true } } }),
+    413, 'PAYLOAD_TOO_LARGE'
+  );
+  await assertJsonFailure(
+    await call(rec, '/admin/tables/layout', { method: 'PUT', body: { base_revision: await tablesRev(), sections: ['Main Hall'], tables: [], pad } }),
+    413, 'PAYLOAD_TOO_LARGE'
+  );
+  assert.equal(await menuRev(), rev, 'a refused body must not change anything');
+});
+
+test('malformed JSON on an admin route gets a JSON 400 INVALID_JSON; routes outside /admin keep their own handling', async () => {
+  // One request per parser: the global 256 KB one and the 2 MB one mounted for the import routes.
+  for (const [method, p] of [['POST', '/admin/menu/items'], ['PUT', '/admin/tables/layout'], ['POST', '/admin/menu/import/commit']]) {
+    await assertJsonFailure(await rawCall(rec, p, { method, body: '{"base_revision": 1, ' }), 400, 'INVALID_JSON');
+  }
+  // The strict parser also refuses a JSON value that is neither an object nor an array.
+  await assertJsonFailure(await rawCall(rec, '/admin/menu/items', { body: '"just a string"' }), 400, 'INVALID_JSON');
+
+  // The handler is scoped to /admin, so the existing routes answer a parse failure exactly as before.
+  const other = await rawCall(rec, '/orders', { body: '{"table_id": ' });
+  assert.equal(other.status, 400);
+  assert.doesNotMatch(other.headers.get('content-type') || '', /application\/json/, 'the /admin handler must not change other routes');
+});
+
+test('a non-reception host gets 403 RECEPTION_ONLY before an oversized import body is parsed', async () => {
+  const body = { base_revision: 0, rows: [], pad: 'x'.repeat(2 * 1024 * 1024 + 4096) };
+  for (const p of ['/admin/menu/import/preview', '/admin/menu/import/commit']) {
+    for (const t of [token, undefined]) {
+      await assertJsonFailure(await call(handset, p, { method: 'POST', body, token: t }), 403, 'RECEPTION_ONLY');
+    }
+  }
+});
+
+test('base_revision is strict: a JSON number in the body, or digits in the DELETE query string, nothing else', async () => {
+  const rev = await menuRev();
+  const categoriesBefore = (await json(await call(rec, '/menu'))).categories;
+  const refused = async (res, label) => {
+    assert.equal(res.status, 400, `${label} should be refused, got ${res.status}`);
+    assert.equal((await json(res)).code, 'BASE_REVISION_REQUIRED', label);
+  };
+
+  // Values JavaScript would quietly turn into a number. The first four coerce to the CURRENT
+  // revision, so a loose reader would accept them and the edit would go through.
+  const odd = [String(rev), [rev], ` ${rev} `, `${rev}.0`, false, [], ' ', true, '0', 0.5, {}, null];
+  for (const value of odd) {
+    await refused(
+      await call(rec, '/admin/menu/categories', { method: 'POST', body: { base_revision: value, name: 'StrictProbe' } }),
+      `body base_revision ${JSON.stringify(value)}`
+    );
+  }
+  // 1e400 is valid JSON that parses to Infinity; the integer check refuses it.
+  await refused(await rawCall(rec, '/admin/menu/categories', { body: '{"base_revision":1e400,"name":"StrictProbe"}' }), 'body base_revision 1e400');
+
+  // DELETE takes digits from the query string and nothing else. The category does not exist,
+  // so even a loose reader could not delete anything real.
+  for (const q of ['abc', '3.0', `${rev}.0`, ' ', `-${rev}`, `${rev}%20`, `0x${rev.toString(16)}`]) {
+    await refused(await call(rec, `/admin/menu/categories?name=NoSuchCategory&base_revision=${q}`, { method: 'DELETE' }), `DELETE ?base_revision=${q}`);
+  }
+  await refused(await call(rec, '/admin/menu/categories?name=NoSuchCategory', { method: 'DELETE', body: { base_revision: rev } }), 'DELETE with the revision only in the body');
+  const wellFormed = await call(rec, `/admin/menu/categories?name=NoSuchCategory&base_revision=${rev}`, { method: 'DELETE' });
+  assert.equal(wellFormed.status, 404, 'digits get past the revision gate (the category simply does not exist)');
+
+  // Every other method takes the revision from the JSON body only, never from the query string.
+  await refused(await call(rec, `/admin/menu/categories?base_revision=${rev}`, { method: 'POST', body: { name: 'StrictProbe' } }), 'POST with the revision only in the query string');
+  await refused(await call(rec, `/admin/menu/categories?base_revision=${rev}`, { method: 'PUT', body: { from: 'Starters', to: 'StrictProbe' } }), 'PUT with the revision only in the query string');
+
+  const after = await json(await call(rec, '/menu'));
+  assert.equal(after.revision, rev, 'a refused edit must not change anything');
+  assert.deepEqual(after.categories, categoriesBefore);
+});
+
+test('a merge import with skip_invalid but no valid row is refused with NO_VALID_ROWS and writes nothing', async () => {
+  const backupsDir = path.join(rec.dataDir, 'backups');
+  const menuBackups = () => (fs.existsSync(backupsDir) ? fs.readdirSync(backupsDir) : []).filter(f => f.startsWith('menu_cache.')).sort();
+  const revisionOnDisk = () => JSON.parse(fs.readFileSync(path.join(rec.dataDir, 'menu_cache.json'), 'utf8')).revision;
+
+  const ws = new WebSocket(`ws://127.0.0.1:${rec.port}/live`);
+  const seen = [];
+  await new Promise((resolve, reject) => { ws.on('open', resolve); ws.on('error', reject); });
+  ws.on('message', m => seen.push(JSON.parse(m.toString()).type));
+
+  const rev = await menuRev();
+  const backupsBefore = menuBackups();
+  const res = await call(rec, '/admin/menu/import/commit', {
+    method: 'POST',
+    body: { base_revision: rev, rows: [{ name: 'Bad', category: 'Starters', price: 'x', veg: 'yes' }], skip_invalid: true }
+  });
+  assert.equal(res.status, 400);
+  assert.equal((await json(res)).code, 'NO_VALID_ROWS');
+  assert.equal(await menuRev(), rev, 'a refused import must not bump the revision');
+  assert.equal(revisionOnDisk(), rev, 'nor touch the file on disk');
+  assert.deepEqual(menuBackups(), backupsBefore, 'nor write a backup');
+
+  await new Promise(r => setTimeout(r, 400)); // a broadcast would have arrived well within this
+  ws.close();
+  assert.ok(!seen.includes('menu_updated'), 'nor broadcast a menu update');
+});
+
+// Keep this one last: it adds 2000 items to the shared hub.
+test('a 2000-row import commit larger than the global 256 KB limit is accepted', async () => {
+  const pad = 'x'.repeat(100);
+  const rows = Array.from({ length: 2000 }, (_, i) => ({ name: `Commit ${i} ${pad}`, category: 'Bulk', price: '10', veg: 'yes' }));
+  const rev = await menuRev();
+  assert.ok(JSON.stringify({ base_revision: rev, rows }).length > 256 * 1024, 'fixture must exceed the global limit');
+
+  const res = await call(rec, '/admin/menu/import/commit', { method: 'POST', body: { base_revision: rev, rows } });
+  assert.equal(res.status, 200);
+  const body = await json(res);
+  assert.equal(body.counts.new, 2000);
+  assert.equal(body.revision, rev + 1);
 });

@@ -56,8 +56,10 @@ app.use(cors({
 // Menu imports can carry up to 2000 rows with modifiers. Give just those routes a
 // bigger body limit. This MUST be mounted before the global parser: the global one
 // would reject anything over 256 KB first, and a body that is already parsed is
-// skipped by the later parser.
-app.use('/admin/menu/import', express.json({ limit: '2mb' }));
+// skipped by the later parser. The reception guard sits in front of the bigger
+// parser, so a handset or any other LAN host is refused (403) before the hub
+// reads up to 2 MB from it.
+app.use('/admin/menu/import', requireReception, express.json({ limit: '2mb' }));
 app.use(express.json({ limit: '256kb' }));
 
 // -------------------------------------------------------------
@@ -522,9 +524,17 @@ app.get('/tables', requireDevice, (req, res) => {
 // Admin catalog editing — reception laptop only (requireReception).
 // Every write carries `base_revision` (JSON body, or query string for DELETE).
 // -------------------------------------------------------------
+// Strict on purpose: coercing with Number() would accept [], false, " ", true and "0x1" as
+// revisions. DELETE has no body, so it takes digits from the query string; every other
+// method takes a JSON number from the body. Anything else is NaN, which updateCatalog
+// refuses as BASE_REVISION_REQUIRED (as it does a non-integer such as 1.5 or Infinity).
 function readBaseRevision(req) {
-  const raw = req.body?.base_revision ?? req.query?.base_revision;
-  return raw === undefined || raw === '' ? NaN : Number(raw);
+  if (req.method === 'DELETE') {
+    const raw = req.query?.base_revision;
+    return typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : NaN;
+  }
+  const raw = req.body?.base_revision;
+  return typeof raw === 'number' ? raw : NaN;
 }
 
 function sendCatalogFailure(res, result) {
@@ -612,6 +622,21 @@ app.put('/admin/tables/layout', requireReception, async (req, res) => {
 
   broadcast('tables_updated', restaurantCache.getTablesCache(pairing.restaurant_id));
   res.json({ success: true, revision: result.data.revision, tables: result.data.tables, sections: result.data.sections });
+});
+
+// Body-parser failures (oversize, malformed JSON) are raised by the parsers mounted at the top
+// of the stack, before any admin route runs. Answer them in the same { success, error, code }
+// shape as every other admin failure instead of Express's HTML page, which carries a stack
+// trace and install paths. Scoped to /admin so the other routes behave exactly as before.
+app.use('/admin', (err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  if (err?.type === 'entity.too.large') {
+    return res.status(413).json({ success: false, error: 'Request is too large.', code: 'PAYLOAD_TOO_LARGE' });
+  }
+  if (err?.type === 'entity.parse.failed') {
+    return res.status(400).json({ success: false, error: 'Request body is not valid JSON.', code: 'INVALID_JSON' });
+  }
+  return next(err);
 });
 
 function buildPreviewForTable(tableId, pairing, adjustments) {

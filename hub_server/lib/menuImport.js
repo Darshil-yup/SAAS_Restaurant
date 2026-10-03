@@ -268,13 +268,18 @@ export function applyImport(menu, rows, { mode = 'merge', skipInvalid = false, i
 
   const good = preview.rows.filter(r => r.status !== 'error');
 
-  // In replace mode, need at least one valid (non-error) row to apply
-  if (mode === 'replace' && good.length === 0) {
+  // Need at least one valid (non-error) row to apply. A row with no changes is still valid.
+  // Refusing here, in either mode, keeps a no-op import from becoming a write: that would
+  // bump the revision (which makes the hub authoritative over cloud pulls), take a backup
+  // and broadcast, all for nothing.
+  if (good.length === 0) {
     return {
       ok: false,
       status: 400,
       code: 'NO_VALID_ROWS',
-      error: 'Replace needs at least one valid row. Nothing was changed.'
+      error: mode === 'replace'
+        ? 'Replace needs at least one valid row. Nothing was changed.'
+        : 'No valid rows to import. Nothing was changed.'
     };
   }
 

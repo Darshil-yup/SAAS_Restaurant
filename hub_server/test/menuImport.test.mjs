@@ -325,3 +325,47 @@ test('replace with one valid row plus one invalid row (missing price/veg) keeps 
   assert.ok(result.data.items.some(i => i.id === 'm1'), 'Paneer Tikka should be kept (name-claimed)');
   assert.ok(result.data.items.some(i => i.id === 'm2'), 'Dal Tadka should be kept (matched)');
 });
+
+// A merge import where nothing is valid must be refused, not applied as a no-op write: a no-op write
+// would still bump the revision, write a backup, broadcast, and make the hub authoritative over cloud pulls.
+
+test('NO_VALID_ROWS: merge + skipInvalid with only invalid rows is refused and the menu is unchanged', () => {
+  const original = menu();
+  const snapshot = structuredClone(original);
+  const bad = [{ name: 'Bad', category: 'Starters', price: 'x', veg: 'yes' }];
+
+  const result = applyImport(original, bad, { mode: 'merge', skipInvalid: true });
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 400);
+  assert.equal(result.code, 'NO_VALID_ROWS');
+  assert.equal(result.error, 'No valid rows to import. Nothing was changed.');
+  assert.equal(result.data, undefined, 'a refusal carries no data to write');
+  assert.deepEqual(original, snapshot);
+
+  // The default mode is merge.
+  assert.equal(applyImport(menu(), bad, { skipInvalid: true }).code, 'NO_VALID_ROWS');
+
+  // Without skipInvalid the row errors are still reported first, with their details.
+  const blocked = applyImport(menu(), bad);
+  assert.equal(blocked.code, 'INVALID_ROWS');
+  assert.equal(blocked.details.length, 1);
+
+  // Replace keeps its own exact wording.
+  const replace = applyImport(menu(), bad, { mode: 'replace', skipInvalid: true });
+  assert.equal(replace.code, 'NO_VALID_ROWS');
+  assert.equal(replace.error, 'Replace needs at least one valid row. Nothing was changed.');
+});
+
+test('NO_VALID_ROWS: an unchanged row still counts as valid, and one valid row among invalid ones still applies', () => {
+  const unchanged = applyImport(menu(), [{ name: 'Paneer Tikka', category: 'Starters', price: '230' }], { mode: 'merge', skipInvalid: true });
+  assert.equal(unchanged.ok, true, 'a row with no changes is valid, so the guard must not treat it as "nothing to import"');
+  assert.equal(unchanged.meta.counts.unchanged, 1);
+
+  const mixed = applyImport(menu(), [
+    { name: 'Paneer Tikka', category: 'Starters', price: '240' },
+    { name: 'Bad', category: 'Starters', price: 'x', veg: 'yes' }
+  ], { mode: 'merge', skipInvalid: true });
+  assert.equal(mixed.ok, true);
+  assert.equal(mixed.meta.skipped, 1);
+  assert.equal(mixed.data.items.find(i => i.id === 'm1').price, 240);
+});
