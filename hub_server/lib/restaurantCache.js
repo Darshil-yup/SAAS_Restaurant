@@ -291,7 +291,16 @@ class RestaurantCache {
     try {
       await this._backupFile(file);
       const tmp = `${file}.tmp`;
-      await fs.promises.writeFile(tmp, JSON.stringify(next, null, 2), 'utf-8');
+      // Flush the temp file to disk before it replaces the real one. Renaming an unsynced file
+      // can leave an empty cache after a power cut, and an empty cache silently gives up hub
+      // authority on the next online boot.
+      const fh = await fs.promises.open(tmp, 'w');
+      try {
+        await fh.writeFile(JSON.stringify(next, null, 2), 'utf-8');
+        await fh.sync();
+      } finally {
+        await fh.close();
+      }
       await fs.promises.rename(tmp, file);
     } catch (err) {
       console.error(`❌ Failed to write ${path.basename(file)}:`, err);
