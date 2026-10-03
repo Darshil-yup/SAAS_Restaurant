@@ -37,3 +37,6 @@ hub_server/data/invoices/
 
 # Rolling safety backups the hub writes before every menu/table edit
 hub_server/data/backups/
+
+# Temp files the hub writes while saving a catalog (renamed away on success)
+hub_server/data/*.tmp

@@ -70,10 +70,12 @@ export async function startHub({ port, trustLoopback, menu, tables, enrollmentCo
       await fail(`exited during startup (exit code ${child.exitCode ?? child.signalCode}). Is the port already in use?`);
     }
     try {
-      const info = await (await fetch(`${base}/pairing-info`)).json();
+      // The timeout covers the body too, so a listener that accepts the connection but never
+      // answers cannot hang this loop past its own deadline.
+      const info = await (await fetch(`${base}/pairing-info`, { signal: AbortSignal.timeout(1000) })).json();
       if (info?.name === hubName) break;
     } catch {
-      // Nothing is listening yet, or what answers is not a hub.
+      // Nothing is listening yet, what answers is not a hub, or it did not answer within a second.
     }
     if (Date.now() > deadline) await fail('did not start within 20 s');
     await sleep(200);
