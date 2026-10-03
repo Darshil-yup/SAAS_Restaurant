@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ChefHat } from 'lucide-react';
+import { cn } from 'cn';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -133,7 +134,7 @@ export const AdminApp = () => {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <StatusPill revision={revision} offline={offline} />
-            <a href={`${hubBase()}/`} className={buttonVariants({ variant: 'outline', className: 'h-10' })}>Kitchen display</a>
+            <a href={`${hubBase()}/`} className={cn(buttonVariants({ variant: 'outline' }), 'h-10')}>Kitchen display</a>
             <ThemeToggle className="size-10" />
           </div>
         </div>
