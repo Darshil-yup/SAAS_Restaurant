@@ -52,12 +52,14 @@ Let a restaurant manage its own menu and table layout from the reception laptop:
 | Route | Purpose |
 |---|---|
 | `POST /admin/menu/items`, `PUT/DELETE /admin/menu/items/:id` | Item CRUD (basics, variants, modifier groups, day-parts, station, availability) |
-| `POST /admin/menu/categories`, `PUT /admin/menu/categories/order` | Add, rename (re-labels items), reorder, delete (only when empty) |
+| `POST /admin/menu/categories`, `PUT /admin/menu/categories` (`{from,to}`), `PUT /admin/menu/categories/order`, `DELETE /admin/menu/categories?name=` | Add, rename (re-labels items), reorder, delete (only when empty) |
 | `POST /admin/menu/import/preview` | Validates rows; returns per-row status (new / updated with field diff / unchanged / error) and counts. No write. |
 | `POST /admin/menu/import/commit` | Applies in one atomic write. Mode `merge` (default) or `replace`. Re-validates server-side; never trusts the preview. |
 | `PUT /admin/tables/layout` | Saves the whole layout in one call: ordered `sections` plus `tables` (`id?`, `name`, `section`, `capacity`). |
 
 The import routes get their own 2 MB JSON parser mounted **ahead of** the global 256 KB parser (a body already parsed is skipped by the later one).
+
+Writes require `base_revision` (JSON body, or query string for DELETE); a missing value returns 400 `BASE_REVISION_REQUIRED`. `PUT /admin/menu/items/:id` merges the keys you send and preserves the rest (send `[]` to clear variants, modifier groups or day-parts). `import/commit` with mode `replace` additionally requires `confirm_replace: true` (else 400 `CONFIRM_REQUIRED`). A hub that has never loaded a catalog returns 409 `HUB_UNINITIALIZED` for edits until it has been online once.
 
 **Ids.** New menu items get `m_<8 hex>` ids. New tables get integer ids from a persisted `next_id` counter that is never reused, so an id can't alias a deleted table's history. Categories remain an ordered array of names.
 
@@ -115,7 +117,7 @@ Orders re-price from the hub menu at `POST /orders`, so edits apply to the next 
 
 ## 4. Failure handling
 
-- Errors use the existing `{ success:false, error, code }` shape: `RECEPTION_ONLY` (403), `STALE_REVISION` (409), `TABLE_HAS_OPEN_BILL` (409), `INVALID_ROWS` (400, with row details), oversize bodies 413.
+- Errors use the existing `{ success:false, error, code }` shape: `RECEPTION_ONLY` (403), `STALE_REVISION` (409), `TABLE_HAS_OPEN_BILL` (409), `INVALID_ROWS` (400, with row details), `NO_VALID_ROWS` (400, a replace or merge import that leaves no valid row, so nothing is written), oversize bodies 413 `PAYLOAD_TOO_LARGE` and malformed JSON 400 `INVALID_JSON` (both answered as JSON for `/admin` routes only). `base_revision` is strict: body routes take it as a JSON number and DELETE routes as a digits-only query string; anything else is 400 `BASE_REVISION_REQUIRED`.
 - Admin writes go to a temp file then rename, and the in-memory cache is swapped only after success. (Today `saveMenuToDisk` mutates memory before the disk write.) A failure returns 500 `WRITE_FAILED` and leaves state unchanged.
 - All catalog writes are serialised through a single promise chain so read-modify-write cannot interleave.
 - A cloud-sync failure never blocks or rolls back an edit.
