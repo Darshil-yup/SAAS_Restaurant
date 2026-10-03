@@ -1,6 +1,7 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import WebSocket from 'ws';
 import { startHub, call, RESTAURANT_ID } from './helpers/spawnHub.mjs';
@@ -427,6 +428,79 @@ test('any other failure on an admin route is a JSON error too, never an HTML pag
   await assertJsonFailure(latin1, 415, 'BAD_REQUEST');
 
   assert.equal(await menuRev(), rev, 'a failed request must not change anything');
+});
+
+// ---------------------------------------------------------------- Host and Origin
+
+// A request from loopback with whatever Host and Origin headers are asked for. fetch will not let a
+// test choose its Host, and the Host a request names is exactly what is under test here.
+const rawHttp = ({ port, path: urlPath, headers = {}, body, method = 'POST' }) => new Promise((resolve, reject) => {
+  const payload = body === undefined ? undefined : JSON.stringify(body);
+  const req = http.request({
+    host: '127.0.0.1',
+    port,
+    path: urlPath,
+    method,
+    headers: { 'Content-Type': 'application/json', ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}), ...headers }
+  }, res => {
+    let text = '';
+    res.setEncoding('utf8');
+    res.on('data', chunk => { text += chunk; });
+    res.on('end', () => resolve({ status: res.statusCode, text, json: () => JSON.parse(text) }));
+  });
+  req.on('error', reject);
+  if (payload) req.write(payload);
+  req.end();
+});
+
+test('a request from loopback is refused unless it is addressed to this machine: Host and Origin are checked too', async () => {
+  const port = rec.port;
+  const rev = await menuRev();
+  const categoriesBefore = (await json(await call(rec, '/menu'))).categories;
+  const attempt = (headers, p = '/admin/menu/categories') =>
+    rawHttp({ port, path: p, headers, body: p.includes('/import/') ? { rows: [] } : { base_revision: rev, name: 'HostProbe' } });
+  const refused = (res, label) => {
+    assert.equal(res.status, 403, `${label}: expected 403, got ${res.status}: ${res.text.slice(0, 120)}`);
+    const body = res.json();
+    assert.equal(body.success, false, label);
+    assert.equal(body.code, 'RECEPTION_ONLY', label);
+  };
+
+  // DNS rebinding: the page's own hostname resolves to this laptop, so the request arrives from loopback.
+  refused(await attempt({ Host: `evil.example:${port}`, Origin: `http://evil.example:${port}` }), 'rebinding (Host and Origin)');
+  refused(await attempt({ Host: `evil.example:${port}` }), 'a foreign Host alone');
+  // A page served by some other device and opened in a browser on this laptop.
+  refused(await attempt({ Host: `127.0.0.1:${port}`, Origin: 'http://evil.example' }), 'a foreign Origin');
+  refused(await attempt({ Host: `127.0.0.1:${port}`, Origin: 'http://10.254.254.254:8080' }), 'an Origin on the LAN that is not this machine');
+  refused(await attempt({ Host: `127.0.0.1:${port}`, Origin: 'null' }), 'an opaque Origin');
+  // The same guard sits in front of the bigger import parser.
+  refused(await attempt({ Host: `evil.example:${port}` }, '/admin/menu/import/preview'), 'the import routes');
+
+  assert.equal(await menuRev(), rev, 'a refused request must not change anything');
+  assert.deepEqual((await json(await call(rec, '/menu'))).categories, categoriesBefore);
+});
+
+test('the reception laptop can still reach /admin as localhost, as 127.0.0.1, as [::1] or by its own LAN IP', async () => {
+  const port = rec.port;
+  const { lan_ip: lanIp } = await json(await call(rec, '/pairing-info'));
+  // A revision other than the current one is refused as stale, so nothing here can change anything:
+  // a 409 STALE_REVISION proves the request got past the guard and into the route.
+  const stale = (await menuRev()) + 1;
+  const probe = headers => rawHttp({ port, path: '/admin/menu/categories', headers, body: { base_revision: stale, name: 'HostProbe' } });
+
+  for (const [label, headers] of [
+    ['Host 127.0.0.1 and no Origin', { Host: `127.0.0.1:${port}` }],
+    ['Host localhost', { Host: `localhost:${port}` }],
+    ['Host localhost without a port', { Host: 'localhost' }],
+    ['Host [::1]', { Host: `[::1]:${port}` }],
+    ['the hub\'s LAN IP as Host and Origin', { Host: `${lanIp}:${port}`, Origin: `http://${lanIp}:${port}` }],
+    ['an Origin on localhost with another port (a dev server)', { Host: `127.0.0.1:${port}`, Origin: 'http://localhost:5173' }]
+  ]) {
+    const res = await probe(headers);
+    assert.equal(res.status, 409, `${label} must pass the guard, got ${res.status}: ${res.text.slice(0, 120)}`);
+    assert.equal(res.json().code, 'STALE_REVISION', label);
+  }
+  assert.equal(await menuRev(), stale - 1, 'nothing changed');
 });
 
 test('a non-reception host gets 403 RECEPTION_ONLY before an oversized import body is parsed', async () => {

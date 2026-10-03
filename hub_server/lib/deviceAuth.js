@@ -180,12 +180,46 @@ export function requireDevice(req, res, next) {
   });
 }
 
+// The hostname a Host header value ("host[:port]") or an Origin value ("scheme://host[:port]")
+// names, lower-cased and with IPv6 brackets removed; '' when it is not a host at all (a missing
+// header, "null"). Parsed as a URL so that tricks like "127.0.0.1@evil.example" resolve to the
+// host a browser would really contact.
+function hostnameOf(value, { withScheme }) {
+  try {
+    return new URL(withScheme ? value : `http://${value}`).hostname.replace(/^\[|\]$/g, '');
+  } catch {
+    return '';
+  }
+}
+
+// Is this a name the reception laptop itself is reached by?
+function isLocalHostname(hostname) {
+  return hostname === 'localhost' || (hostname !== '' && localAddresses.has(hostname));
+}
+
 /**
  * Menu and table editing is limited to the reception laptop. Enrolled waiter
  * handsets hold a 30-day token, so a token is deliberately NOT enough here.
+ *
+ * Arriving from loopback is not enough either: any web page open in a browser on that same
+ * laptop can make the browser call the hub, either by rebinding its own hostname to 127.0.0.1
+ * (the request then carries that foreign Host) or by being served from another LAN device (the
+ * request then carries that device's Origin). So the request must also be addressed to this
+ * machine: its Host header, and its Origin header when the browser sends one, must name
+ * localhost, 127.0.0.1, [::1] or an address added through trustLocalAddress (the hub's own LAN
+ * IP). The port is ignored, so a dev server on localhost:5173 works.
+ *
+ * Consequence for the admin page: open it through localhost or the hub's LAN IP
+ * (http://localhost:4000, http://<LAN-IP>:4000). A machine-name URL such as
+ * http://reception-pc:4000 is refused, as is any page served by another host.
  */
 export function requireReception(req, res, next) {
-  if (isLoopback(req)) return next();
+  const host = hostnameOf(req.headers?.host ?? '', { withScheme: false });
+  const origin = req.headers?.origin;
+  const addressedToThisMachine = isLocalHostname(host) &&
+    (origin === undefined || isLocalHostname(hostnameOf(origin, { withScheme: true })));
+
+  if (isLoopback(req) && addressedToThisMachine) return next();
 
   return res.status(403).json({
     success: false,
