@@ -268,7 +268,23 @@ class RestaurantCache {
     } catch (err) {
       return failure(500, 'MUTATION_FAILED', err.message);
     }
-    if (!result.ok) return result;
+
+    // Do not trust what the mutator handed back. The chain is shared by every edit and every
+    // cloud pull, so a promise that never settles must not be returned from here (it would
+    // wedge them all), and a result without the right shape must not be written.
+    const malformed = () => failure(500, 'MUTATION_FAILED', 'The edit could not be applied. Nothing was changed.');
+    if (typeof result?.then === 'function') {
+      Promise.resolve(result).catch(() => {}); // nobody will await it: swallow a later rejection
+      return malformed();
+    }
+    if (result === null || typeof result !== 'object') return malformed();
+    if (result.ok !== true) {
+      return Number.isInteger(result.status) && typeof result.code === 'string' ? result : malformed();
+    }
+    const arrays = kind === 'menu' ? ['items', 'categories'] : ['tables'];
+    if (!result.data || typeof result.data !== 'object' || !arrays.every(k => Array.isArray(result.data[k]))) {
+      return malformed();
+    }
 
     const next = { ...result.data, revision: current.revision + 1, source: 'hub', uninitialized: false };
     const file = CATALOG_FILES[kind];

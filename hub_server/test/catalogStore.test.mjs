@@ -505,3 +505,51 @@ test('realtime events pull a different restaurant\'s catalog over a hub edit too
     assert.equal(backupsOf(kind).length, 1, `${table}: the replaced catalog was backed up`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// updateCatalog does not trust what a mutator hands back
+// ---------------------------------------------------------------------------
+
+test('a mutator that answers with anything but a well-formed result fails with MUTATION_FAILED and changes nothing', async () => {
+  const bad = [
+    ['menu', 'an async mutator', () => Promise.resolve({ ok: true, data: { ...MENU(), items: [] } })],
+    ['menu', 'an async mutator that rejects', () => Promise.reject(new Error('rejected later'))],
+    ['menu', 'ok:true with no data', () => ({ ok: true })],
+    ['menu', 'ok:true with data that has no items', () => ({ ok: true, data: { categories: ['Starters'] } })],
+    ['menu', 'ok:true with data that has no categories', () => ({ ok: true, data: { items: [] } })],
+    ['menu', 'null', () => null],
+    ['menu', 'undefined', () => undefined],
+    ['menu', 'a string', () => 'ok'],
+    ['menu', 'ok:false with no status and no code', () => ({ ok: false })],
+    ['menu', 'ok:false with a status but no code', () => ({ ok: false, status: 400, error: 'x' })],
+    ['menu', 'ok:false with a code but no status', () => ({ ok: false, code: 'NOPE', error: 'x' })],
+    ['tables', 'ok:true with menu arrays instead of tables', () => ({ ok: true, data: { items: [], categories: [] } })],
+    ['tables', 'ok:true with tables that is not an array', () => ({ ok: true, data: { tables: 'nope' } })]
+  ];
+  for (const [kind, label, mutator] of bad) {
+    reset();
+    const r = RACE[kind];
+    const before = readJson(r.file);
+    const res = await cache.updateCatalog(kind, 0, mutator);
+    assert.deepEqual([res.ok, res.status, res.code], [false, 500, 'MUTATION_FAILED'], `${kind}, ${label}`);
+    assert.equal(typeof res.error, 'string', `${kind}, ${label}: an error message`);
+    assert.equal(r.get().revision, 0, `${kind}, ${label}: memory revision`);
+    assert.equal(r.get()[r.rows].length, before[r.rows].length, `${kind}, ${label}: memory rows`);
+    assert.deepEqual(readJson(r.file), before, `${kind}, ${label}: file on disk`);
+    assert.equal(backupsOf(kind).length, 0, `${kind}, ${label}: nothing was backed up`);
+  }
+  await new Promise(resolve => setImmediate(resolve)); // let any swallowed rejection surface
+});
+
+test('a mutator that never settles cannot wedge the write chain', { timeout: 3000 }, async () => {
+  reset();
+  const res = await cache.updateCatalog('menu', 0, () => new Promise(() => {}));
+  assert.deepEqual([res.ok, res.status, res.code], [false, 500, 'MUTATION_FAILED']);
+
+  // The chain is shared by both catalogs and by cloud pulls, and all of them still settle.
+  const edit = await cache.updateCatalog('tables', 0, addTable);
+  assert.equal(edit.ok, true);
+  assert.equal(edit.data.revision, 1);
+  assert.equal(await cache.applyPulledCatalog('menu', CLOUD_MENU()), true);
+  assert.deepEqual(cache.getMenuCache().items.map(i => i.id), ['c1']);
+});
