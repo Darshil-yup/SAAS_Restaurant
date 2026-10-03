@@ -713,6 +713,7 @@ const KitchenHubApp = () => {
           >
             <RefreshCw size={14} /> Refresh
           </motion.button>
+          <a href="/admin" style={{ background: 'var(--color-surface-soft)', color: 'var(--color-body)', border: '1px solid var(--color-hairline)', padding: '8px 14px', borderRadius: 'var(--radius-full)', textDecoration: 'none', display: 'flex', alignItems: 'center', fontSize: '12px', fontWeight: 600 }}>Menu &amp; Tables</a>
           <ThemeToggle />
         </div>
       </header>
