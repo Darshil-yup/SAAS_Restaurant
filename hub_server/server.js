@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 
 import { hubConfig } from './lib/hubConfig.js';
-import { ticketStore } from './lib/ticketStore.js';
+import { ticketStore, ticketMatchesTable } from './lib/ticketStore.js';
 import { syncQueue } from './lib/syncQueue.js';
 import { authenticateHubStaff } from './lib/supabaseClient.js';
 import { restaurantCache } from './lib/restaurantCache.js';
@@ -477,11 +477,9 @@ function getLiveTables(restaurantId) {
   const baseTables = layoutData.uninitialized ? MASTER_TABLES : (layoutData.tables || []);
 
   return baseTables.map(table => {
-    const tableTickets = activeTickets.filter(t => 
-      String(t.table_id) === String(table.id) || 
-      String(t.table_name).toLowerCase() === table.name.toLowerCase() ||
-      String(t.table_name).toLowerCase() === `table ${table.id}`.toLowerCase()
-    );
+    // Same rule as the bill and the clear (ticketStore), so the floor, the open-bill lock
+    // and the invoice can never disagree about whose ticket this is.
+    const tableTickets = activeTickets.filter(t => ticketMatchesTable(t, table.id, table.name));
 
     if (!tableTickets.length) {
       return {

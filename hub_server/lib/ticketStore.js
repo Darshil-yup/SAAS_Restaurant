@@ -54,6 +54,35 @@ const INITIAL_TICKETS = [
   }
 ];
 
+/**
+ * Does this ticket belong to the table `tableId` (named `tableName`, when the caller knows it)?
+ *
+ * A ticket that carries a table id belongs to exactly that table: the id is compared and
+ * nothing else. Matching it on its name as well would let a table capture the open bill of
+ * another one whenever their names and ids line up by accident (a table the hub numbers 1
+ * next to a cloud table named "T1"; a table renamed away from "T5" next to a new one called
+ * "T5"), and the next clear would invoice and complete someone else's tickets.
+ *
+ * Only a legacy ticket with no table id (null, undefined or '') falls back to its table name:
+ * "t<id>", "table <id>", the bare id, and the table's own name when it is given.
+ * Every place that asks "which tickets are on this table" must use this one rule.
+ */
+export function ticketMatchesTable(ticket, tableId, tableName) {
+  const ticketTableId = ticket?.table_id;
+  if (ticketTableId !== null && ticketTableId !== undefined && ticketTableId !== '') {
+    return String(ticketTableId) === String(tableId);
+  }
+
+  const name = ticket?.table_name == null ? '' : String(ticket.table_name);
+  const lowerName = name.toLowerCase();
+  const id = String(tableId);
+  const lowerId = id.toLowerCase();
+  return lowerName === `t${lowerId}` ||
+         lowerName === `table ${lowerId}` ||
+         name === id ||
+         (tableName != null && tableName !== '' && lowerName === String(tableName).toLowerCase());
+}
+
 class TicketStore {
   constructor() {
     this.tickets = this.loadTickets();
@@ -156,10 +185,7 @@ class TicketStore {
     let clearedCount = 0;
     const clearedTickets = [];
     const updatedList = this.tickets.map(t => {
-      const matchTable = String(t.table_id) === String(tableId) ||
-                         String(t.table_name).toLowerCase() === `t${tableId}`.toLowerCase() ||
-                         String(t.table_name).toLowerCase() === `table ${tableId}`.toLowerCase() ||
-                         String(t.table_name) === String(tableId) ||
+      const matchTable = ticketMatchesTable(t, tableId) ||
                          String(t.id) === String(tableId);
       if (matchTable && (t.status === 'in_progress' || t.status === 'ready')) {
         clearedCount++;
@@ -218,13 +244,7 @@ class TicketStore {
   }
 
   getActiveTicketsForTable(tableId, restaurantId) {
-    const idStr = String(tableId);
-    return this.getActiveTickets(restaurantId).filter(t =>
-      String(t.table_id) === idStr ||
-      String(t.table_name).toLowerCase() === `t${idStr}`.toLowerCase() ||
-      String(t.table_name).toLowerCase() === `table ${idStr}`.toLowerCase() ||
-      String(t.table_name) === idStr
-    );
+    return this.getActiveTickets(restaurantId).filter(t => ticketMatchesTable(t, tableId));
   }
 
   getAllTickets(restaurantId) {
