@@ -153,7 +153,7 @@ test('a failing catalog push never blocks an order, and is shelved after the ret
     assert.equal(syncQueue.queue.length, 0);
     const status = syncQueue.getStatus();
     assert.equal(status.catalog.menu.failed, true);
-    assert.equal(status.quarantined, 1);
+    assert.equal(status.quarantined, 0, 'a shelved menu push is not shelved takings');
   } finally {
     syncQueue.syncStatusToSupabase = originalOrder;
   }

@@ -225,7 +225,8 @@ class SyncQueue {
       queued: this.queue.length,
       // Shelved orders are revenue that never reached the cloud. Surfacing the
       // count keeps that from being a console-only event.
-      quarantined: this.readQuarantine().length,
+      // Orders only: a shelved menu push is reported under `catalog`, not as lost takings.
+      quarantined: this.readQuarantine().filter(q => !isCatalogOp(q)).length,
       online: this.isOnline,
       isSyncing: this.isSyncing,
       last_synced_at: this.lastSyncedAt,
