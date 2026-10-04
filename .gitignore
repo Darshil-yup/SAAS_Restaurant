@@ -40,3 +40,5 @@ hub_server/data/backups/
 
 # Temp files the hub writes while saving a catalog (renamed away on success)
 hub_server/data/*.tmp
+# Newest menu/table revision the cloud is known to hold
+hub_server/data/catalog_sync.json

@@ -4,12 +4,18 @@ import { fileURLToPath } from 'url';
 import { supabase, checkSupabaseConnection, authenticateHubStaff } from './supabaseClient.js';
 import { ticketStore } from './ticketStore.js';
 import { hubConfig } from './hubConfig.js';
+import { pushMenu, pushTables, isUuid } from './catalogSync.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = process.env.HUB_DATA_DIR || path.join(__dirname, '..', 'data');
 const QUEUE_FILE = path.join(DATA_DIR, 'sync_queue.json');
 const QUARANTINE_FILE = path.join(DATA_DIR, 'quarantine_sync_queue.json');
+// Newest catalog revision the cloud is known to hold, per catalog. Survives restarts so the admin page
+// can say "synced" without pushing again.
+const CATALOG_STATE_FILE = path.join(DATA_DIR, 'catalog_sync.json');
+const CATALOG_OPS = { menu: 'SYNC_MENU', tables: 'SYNC_TABLES' };
+const isCatalogOp = item => item?.type === CATALOG_OPS.menu || item?.type === CATALOG_OPS.tables;
 export const MAX_SYNC_ATTEMPTS = 5;
 
 /**
@@ -52,6 +58,31 @@ class SyncQueue {
     this.onReconnectCallbacks = [];
     // Set by the sync methods when a failure looks hub-wide rather than item-specific.
     this.lastFailureSystemic = false;
+    // Seams for tests: the connectivity probe and the cloud client.
+    this.checkConnection = checkSupabaseConnection;
+    this.cloud = supabase;
+    this.catalogState = this.loadCatalogState();
+  }
+
+  loadCatalogState() {
+    try {
+      if (fs.existsSync(CATALOG_STATE_FILE)) return JSON.parse(fs.readFileSync(CATALOG_STATE_FILE, 'utf-8'));
+    } catch (err) {
+      console.warn('⚠️ Could not load catalog_sync.json:', err.message);
+    }
+    return {};
+  }
+
+  saveCatalogState(kind, synced_revision) {
+    this.catalogState = { ...this.catalogState, [kind]: { synced_revision } };
+    // Tiny and rare, so written synchronously and via rename: a crash never leaves half a file.
+    try {
+      const tmp = `${CATALOG_STATE_FILE}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(this.catalogState, null, 2), 'utf-8');
+      fs.renameSync(tmp, CATALOG_STATE_FILE);
+    } catch (err) {
+      console.error('❌ Could not save catalog_sync.json:', err);
+    }
   }
 
   loadQueue() {
@@ -123,7 +154,10 @@ class SyncQueue {
       attempts: 0
     }));
 
-    this.saveQueue([...this.queue, ...restored]);
+    // A quarantined snapshot may be older than one queued since; only the newest per catalog goes back.
+    let merged = [...this.queue];
+    for (const item of restored) merged = isCatalogOp(item) ? this.mergeCatalogOp(merged, item) : [...merged, item];
+    this.saveQueue(merged);
 
     try {
       await fs.promises.writeFile(QUARANTINE_FILE, '[]', 'utf-8');
@@ -171,6 +205,21 @@ class SyncQueue {
     });
   }
 
+  /** Per catalog: is a push waiting, did one get shelved, and which revision does the cloud hold. */
+  getCatalogStatus() {
+    const shelved = this.readQuarantine();
+    const status = {};
+    for (const [kind, type] of Object.entries(CATALOG_OPS)) {
+      const waiting = this.queue.find(q => q.type === type);
+      status[kind] = {
+        synced_revision: this.catalogState[kind]?.synced_revision ?? 0,
+        pending_revision: waiting ? waiting.payload.revision : null,
+        failed: shelved.some(q => q.type === type)
+      };
+    }
+    return status;
+  }
+
   getStatus() {
     return {
       queued: this.queue.length,
@@ -179,7 +228,8 @@ class SyncQueue {
       quarantined: this.readQuarantine().length,
       online: this.isOnline,
       isSyncing: this.isSyncing,
-      last_synced_at: this.lastSyncedAt
+      last_synced_at: this.lastSyncedAt,
+      catalog: this.getCatalogStatus()
     };
   }
 
@@ -210,6 +260,64 @@ class SyncQueue {
     this.processQueue();
   }
 
+  // Keeps one pending push per catalog, always the newest snapshot: a day of offline edits is one push.
+  mergeCatalogOp(queue, op) {
+    const kept = [];
+    let newest = op;
+    for (const q of queue) {
+      if (q.type !== op.type) kept.push(q);
+      else if (q.payload.revision > newest.payload.revision) newest = q;
+    }
+    return [...kept, newest];
+  }
+
+  /** Queues the whole catalog for the cloud. `data` is the committed cache, revision included. */
+  enqueueCatalog(kind, data) {
+    const pairing = hubConfig.getPairingInfo();
+    const body = kind === 'menu'
+      ? { categories: data.categories, items: data.items }
+      : { tables: data.tables };
+    const op = {
+      queue_id: 'q_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      type: CATALOG_OPS[kind],
+      payload: {
+        revision: data.revision,
+        // The restaurant the edit was made for. A hub re-paired before the push must not write it to the new one.
+        restaurant_id: data.restaurant_id || pairing.restaurant_id || null,
+        ...body
+      },
+      queued_at: new Date().toISOString(),
+      attempts: 0
+    };
+    this.saveQueue(this.mergeCatalogOp(this.queue, op));
+    this.processQueue();
+  }
+
+  async syncCatalogToSupabase(item) {
+    const { revision, restaurant_id, ...body } = item.payload;
+    const kind = item.type === CATALOG_OPS.menu ? 'menu' : 'tables';
+    const pairing = hubConfig.getPairingInfo();
+
+    if (!pairing.paired || !isUuid(restaurant_id) || String(restaurant_id) !== String(pairing.restaurant_id)) {
+      // Nothing can make this snapshot correct later, so drop it rather than retry or write to the wrong tenant.
+      console.warn(`[sync] ⚠️ Dropping ${item.type} (revision ${revision}): it was made for a different restaurant than this hub is paired with.`);
+      return true;
+    }
+
+    try {
+      const pushed = kind === 'menu'
+        ? await pushMenu(this.cloud, restaurant_id, body)
+        : await pushTables(this.cloud, restaurant_id, body);
+      this.saveCatalogState(kind, Math.max(revision, this.catalogState[kind]?.synced_revision ?? 0));
+      console.log(`[sync] ✅ ${kind} revision ${revision} pushed to Supabase`, pushed);
+      return true;
+    } catch (err) {
+      this.lastFailureSystemic = isSystemicFailure(err);
+      console.error(`[sync] ❌ ${item.type} failed:`, { message: err.message, code: err.code || 'unknown', details: err.details || err.hint || null });
+      return false;
+    }
+  }
+
   async processQueue() {
     if (this.isSyncing) {
       return;
@@ -222,7 +330,7 @@ class SyncQueue {
       const queuedCount = this.queue.length;
 
       // 1. Check connection state
-      const connResult = await checkSupabaseConnection();
+      const connResult = await this.checkConnection();
       const online = connResult.online;
       this.isOnline = online;
 
@@ -265,8 +373,12 @@ class SyncQueue {
       // 3. Process queued items
       console.log(`[sync] 🔄 Processing ${queuedCount} queued cloud sync item(s)...`);
 
-      const remainingQueue = [...this.queue];
-      const itemsToProcess = [...this.queue];
+      // Orders and status updates go first: a catalog push is bulky and, while the cloud schema
+      // is not migrated yet, fails; it must never delay a bill.
+      const itemsToProcess = [...this.queue.filter(q => !isCatalogOp(q)), ...this.queue.filter(isCatalogOp)];
+      // Edits that arrive while this drain awaits the network must survive it, so the queue is rebuilt
+      // from the live list at the end by removing only what this drain finished with.
+      const finished = new Set();
       let syncedCount = 0;
 
       for (const item of itemsToProcess) {
@@ -286,6 +398,11 @@ class SyncQueue {
           if (success) {
             ticketStore.markTicketSynced(item.ticket.id);
           }
+        } else if (isCatalogOp(item)) {
+          success = await this.syncCatalogToSupabase(item).catch((err) => {
+            console.error('[sync] ❌ Sync catalog exception:', { message: err.message, code: err.code || 'unknown' });
+            return false;
+          });
         } else if (item.type === 'UPDATE_STATUS') {
           success = await this.syncStatusToSupabase(item.payload).catch((err) => {
             console.error('[sync] ❌ Sync status exception:', {
@@ -298,10 +415,7 @@ class SyncQueue {
 
         if (success) {
           syncedCount++;
-          const idx = remainingQueue.findIndex(q => q.queue_id === item.queue_id);
-          if (idx !== -1) {
-            remainingQueue.splice(idx, 1);
-          }
+          finished.add(item.queue_id);
           this.lastSyncedAt = new Date().toISOString();
         } else {
           const targetId = item.ticket?.ticket_number || item.payload?.ticketId || item.queue_id;
@@ -320,18 +434,17 @@ class SyncQueue {
           if (item.attempts >= MAX_SYNC_ATTEMPTS) {
             console.error(`[sync] 🚨 Item ${item.queue_id} (Ticket #${targetId}) reached max retries (${MAX_SYNC_ATTEMPTS}). Quarantining to prevent head-of-line blocking.`);
             await this.quarantineItem(item, 'Max retry attempts exceeded during cloud sync');
-            const idx = remainingQueue.findIndex(q => q.queue_id === item.queue_id);
-            if (idx !== -1) {
-              remainingQueue.splice(idx, 1);
-            }
+            finished.add(item.queue_id);
             // Do not break; allow subsequent healthy items to proceed
           } else {
-            console.warn(`[sync] ⚠️ Item ${item.queue_id} (Ticket #${targetId}) failed sync (attempt ${item.attempts}/${MAX_SYNC_ATTEMPTS}). Retrying on next cycle.`);
+            console.warn(`[sync] ⚠️ Item ${item.queue_id} (${isCatalogOp(item) ? item.type : `Ticket #${targetId}`}) failed sync (attempt ${item.attempts}/${MAX_SYNC_ATTEMPTS}). Retrying on next cycle.`);
+            if (isCatalogOp(item)) continue; // it never holds up a later catalog push
             break; // Stop loop on transient failure and retry on next interval
           }
         }
       }
 
+      const remainingQueue = this.queue.filter(q => !finished.has(q.queue_id));
       this.saveQueue(remainingQueue);
 
       if (syncedCount > 0) {

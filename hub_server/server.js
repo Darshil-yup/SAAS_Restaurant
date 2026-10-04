@@ -552,8 +552,27 @@ async function commitMenu(req, res, mutator, { status = 200 } = {}) {
 
   const pairing = hubConfig.getPairingInfo();
   broadcast('menu_updated', restaurantCache.getMenuCache(pairing.restaurant_id));
+  syncQueue.enqueueCatalog('menu', result.data);
   return res.status(status).json({ success: true, revision: result.data.revision, ...(result.meta || {}) });
 }
+
+// What the editor shows beside "Saved on hub": for each catalog, the revision on the hub, the newest
+// revision the cloud is known to hold, and whether a push is waiting or was shelved.
+app.get('/admin/sync-status', requireReception, (req, res) => {
+  const catalog = syncQueue.getCatalogStatus();
+  res.json({
+    success: true,
+    online: syncQueue.isOnline,
+    menu: { revision: restaurantCache.getMenuCache().revision, ...catalog.menu },
+    tables: { revision: restaurantCache.getTablesCache().revision, ...catalog.tables }
+  });
+});
+
+// "Retry" beside a failed cloud push: shelved pushes (and orders) go back in the queue with a fresh retry budget.
+app.post('/admin/sync/retry', requireReception, async (req, res) => {
+  const result = await syncQueue.requeueQuarantined();
+  res.json({ success: true, ...result, catalog: syncQueue.getCatalogStatus() });
+});
 
 app.post('/admin/menu/items', requireReception, (req, res) =>
   commitMenu(req, res, menu => addItem(menu, req.body?.item), { status: 201 }));
@@ -619,6 +638,7 @@ app.put('/admin/tables/layout', requireReception, async (req, res) => {
   if (!result.ok) return sendCatalogFailure(res, result);
 
   broadcast('tables_updated', restaurantCache.getTablesCache(pairing.restaurant_id));
+  syncQueue.enqueueCatalog('tables', result.data);
   res.json({ success: true, revision: result.data.revision, tables: result.data.tables, sections: result.data.sections });
 });
 

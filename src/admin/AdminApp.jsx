@@ -4,7 +4,8 @@ import { cn } from 'cn';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ThemeToggle';
-import { hubBase, hubGet } from './api';
+import { explainError, hubBase, hubGet, hubSend } from './api';
+import { cloudState } from './lib/cloudStatus';
 import { Notice } from './ui';
 import { MenuTab } from './MenuTab';
 import { TablesTab } from './TablesTab';
@@ -79,8 +80,53 @@ function StatusPill({ revision, offline }) {
   );
 }
 
+// The hub pushes every edit to the cloud in the background; this follows how far it has got. A local
+// call, so it simply polls (and again right after the page is looked at or an edit lands).
+function useCloudStatus() {
+  const [status, setStatus] = useState(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setStatus(await hubGet('/admin/sync-status'));
+    } catch {
+      // the hub's own outage is reported by the main loads; keep the last answer
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const timer = setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 5000);
+    return () => clearInterval(timer);
+  }, [refresh]);
+
+  return { status, refresh };
+}
+
+const CLOUD_TONE = { synced: 'green', pending: 'amber', failed: 'rust' };
+
+function CloudPill({ state, onRetry }) {
+  if (!state) return null;
+  const tone = CLOUD_TONE[state.state];
+  return (
+    <span
+      className="inline-flex h-8 items-center gap-2 rounded-full border px-3 text-xs font-medium"
+      style={{ background: `var(--status-${tone}-bg)`, color: `var(--status-${tone}-text)`, borderColor: `var(--status-${tone}-border)` }}
+      title="The hub keeps its own copy and sends changes to the cloud whenever it has internet."
+    >
+      <span className="size-2 rounded-full bg-current" aria-hidden="true" />
+      {state.label}
+      {state.state === 'failed' && (
+        <button type="button" className="underline underline-offset-2 focus-visible:outline focus-visible:outline-2" onClick={onRetry}>
+          Retry
+        </button>
+      )}
+    </span>
+  );
+}
+
 export const AdminApp = () => {
   const catalog = useCatalog();
+  const cloud = useCloudStatus();
   const [tab, setTab] = useState('menu');
   const [toast, setToast] = useState(null);
   const [stale, setStale] = useState(null); // 'menu' | 'layout' | null: a write found the hub ahead of the page
@@ -118,6 +164,17 @@ export const AdminApp = () => {
 
   const revision = tab === 'menu' ? menu?.revision : layout?.revision;
   const offline = Boolean(catalog.menuError && catalog.layoutError && !menu && !layout);
+  const cloudStatus = cloud.status && (tab === 'menu' ? cloud.status.menu : cloud.status.tables);
+  const cloudNow = offline ? null : cloudState(cloudStatus, cloud.status?.online !== false);
+
+  const retryCloud = async () => {
+    try {
+      await hubSend('POST', '/admin/sync/retry');
+    } catch (error) {
+      notify(explainError(error), 'error');
+    }
+    cloud.refresh();
+  };
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -134,6 +191,7 @@ export const AdminApp = () => {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <StatusPill revision={revision} offline={offline} />
+            <CloudPill state={cloudNow} onRetry={retryCloud} />
             <a href={`${hubBase()}/`} className={cn(buttonVariants({ variant: 'outline' }), 'h-10')}>Kitchen display</a>
             <ThemeToggle className="size-10" />
           </div>

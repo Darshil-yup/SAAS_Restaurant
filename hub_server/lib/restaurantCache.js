@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { supabase, checkSupabaseConnection } from './supabaseClient.js';
 import { normalizeCloudMenuItem } from './menuNormalize.js';
+import { tablesFromCloud } from './catalogSync.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -380,7 +381,10 @@ class RestaurantCache {
       } catch (e) {}
 
       let categories = (catData && catData.length) ? catData.map(c => c.name || c) : [];
-      let items = (itemData && itemData.length) ? itemData.map(normalizeCloudMenuItem) : [];
+      // hub_ref is the id the hub gave the item; rows written before it existed fall back to the cloud id.
+      let items = (itemData && itemData.length)
+        ? itemData.map(row => normalizeCloudMenuItem({ ...row, id: row.hub_ref || row.id }))
+        : [];
 
       // Fallback to default seed if Supabase table returns empty
       if (!categories.length && !items.length) {
@@ -411,16 +415,14 @@ class RestaurantCache {
           .from('tables')
           .select('*')
           .eq('restaurant_id', restaurantId)
+          // The hub writes display_order from its layout order on every push; id breaks ties for rows
+          // that never had one.
+          .order('display_order', { ascending: true })
           .order('id', { ascending: true });
         tablesData = res.data;
       } catch (e) {}
 
-      let tables = (tablesData && tablesData.length) ? tablesData.map((t, idx) => ({
-        id: t.id || (idx + 1),
-        name: t.name || `T${idx + 1}`,
-        section: t.section || 'Main Dining',
-        capacity: Number(t.capacity) || 4
-      })) : DEFAULT_TABLES;
+      let tables = (tablesData && tablesData.length) ? tablesFromCloud(tablesData) : DEFAULT_TABLES;
 
       return {
         restaurant_id: restaurantId,

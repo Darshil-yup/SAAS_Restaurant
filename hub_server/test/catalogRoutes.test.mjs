@@ -634,3 +634,38 @@ test('a 2000-row import commit larger than the global 256 KB limit is accepted',
   assert.equal(body.counts.new, 2000);
   assert.equal(body.revision, rev + 1);
 });
+
+// ---------------------------------------------------------------- cloud sync status
+
+test('GET /admin/sync-status is reception-only and shows an offline edit waiting for the cloud', async () => {
+  const refused = await call(handset, '/admin/sync-status', { token });
+  assert.equal(refused.status, 403);
+  assert.equal((await json(refused)).code, 'RECEPTION_ONLY');
+
+  // The test hub is pointed at the unconfigured placeholder Supabase URL, so it is offline and nothing leaves it.
+  const before = await json(await call(rec, '/admin/sync-status'));
+  assert.equal(before.success, true);
+  const rev = before.menu.revision;
+  const added = await call(rec, '/admin/menu/items', {
+    method: 'POST',
+    body: { base_revision: rev, item: { name: 'Sync Probe', category: 'Starters', price: 10, isVeg: true } }
+  });
+  assert.equal(added.status, 201);
+
+  const after = await json(await call(rec, '/admin/sync-status'));
+  assert.equal(after.menu.revision, rev + 1);
+  assert.equal(after.menu.pending_revision, rev + 1, 'the edit is queued for the cloud');
+  assert.equal(after.menu.synced_revision, 0);
+  assert.equal(after.menu.failed, false);
+  // Earlier tests edited the layout on this same offline hub, so its newest revision is waiting too.
+  assert.equal(after.tables.pending_revision, after.tables.revision);
+
+  // Several offline edits are still one queued push, carrying the newest revision.
+  await call(rec, '/admin/menu/items', {
+    method: 'POST',
+    body: { base_revision: rev + 1, item: { name: 'Sync Probe 2', category: 'Starters', price: 10, isVeg: true } }
+  });
+  const queue = JSON.parse(fs.readFileSync(path.join(rec.dataDir, 'sync_queue.json'), 'utf-8'));
+  assert.equal(queue.filter(q => q.type === 'SYNC_MENU').length, 1);
+  assert.equal(queue.find(q => q.type === 'SYNC_MENU').payload.revision, rev + 2);
+});
