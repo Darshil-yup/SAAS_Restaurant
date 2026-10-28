@@ -11,10 +11,14 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { authFetch, authWsUrl, captureTokenFromUrl, consumePendingEnrollmentCode, enrollWithCode, hasToken } from '../services/hubAuth';
+import { heldGroups } from '../lib/ticketView';
 import { QrScannerModal } from './QrScannerModal';
 import { WaiterLogin } from './WaiterLogin';
+import { SentOrders } from './SentOrders';
+import { cancelledMessage } from '../admin/lib/openOrders';
 
 const WAITER_SESSION_KEY = 'kullina_waiter_session';
+
 
 export const WaiterApp = () => {
   const { currentRestaurant, isMenuUninitialized: posMenuUninitialized } = usePos() || {};
@@ -83,9 +87,19 @@ export const WaiterApp = () => {
   const [activeOrders, setActiveOrders] = useState([]);
   const wasConnectedRef = useRef(false);
   const isGracePeriodRef = useRef(true);
+  // Which read of the floor started last. Every socket event starts a fresh read, so two can be on their way at
+  // once, and nothing says they land in the order they left: an older one arriving last would put the screen back
+  // as it was. Only the most recently STARTED read is applied.
+  const readSeqRef = useRef(0);
+  // Orders already counted into a table's total. The hub announces every new order twice (NEW_ORDER and
+  // order_created) and both arrive within the same moment, so a total added on each would show double until the
+  // next read of the floor corrected it.
+  const countedOrdersRef = useRef(new Set());
+  const orderKey = ticket => String(ticket?.id ?? ticket?.ticket_number);
 
   const fetchLiveState = useCallback(async (targetUrl = hubUrl) => {
     const cleanUrl = targetUrl.replace(/\/+$/, '');
+    const seq = ++readSeqRef.current;
     try {
       const [tablesRes, ordersRes, menuRes] = await Promise.all([
         authFetch(`${cleanUrl}/tables`).catch(() => null),
@@ -93,28 +107,34 @@ export const WaiterApp = () => {
         authFetch(`${cleanUrl}/menu`).catch(() => null)
       ]);
 
-      if (tablesRes?.status === 401 || ordersRes?.status === 401 || menuRes?.status === 401) {
-        console.warn('Hub rejected request with 401 Unauthorized: handset requires enrollment');
+      // 403 as well as 401: a tablet that was set up as a kitchen screen shares this browser's storage, so
+      // it arrives here holding a token the hub refuses for the till. /tables and /menu answer 403 only for
+      // that, and the cure is the same as for no token -- enrol as a handset, which replaces it.
+      const turnedAway = r => r?.status === 401 || r?.status === 403;
+      if (turnedAway(tablesRes) || turnedAway(menuRes) || ordersRes?.status === 401) {
+        console.warn('Hub refused this device: handset requires enrollment');
         setIsEnrolled(false);
         setConnStatus('unauthorized');
         return;
       }
 
-      if (menuRes && menuRes.ok) {
-        const menuData = await menuRes.json();
-        setHubMenuUninitialized(!!menuData.uninitialized);
+      // Read the bodies first, then decide: reading is itself asynchronous, and a newer read may land meanwhile.
+      const menuData = menuRes && menuRes.ok ? await menuRes.json() : null;
+      const tablesData = tablesRes && tablesRes.ok ? await tablesRes.json() : null;
+      const ordersData = ordersRes && ordersRes.ok ? await ordersRes.json() : null;
+      if (seq !== readSeqRef.current) return;   // a newer read has started since; this answer is the older one
+
+      if (menuData) setHubMenuUninitialized(!!menuData.uninitialized);
+
+      if (tablesData) {
+        if (tablesData.uninitialized) setHubMenuUninitialized(true);
+        if (tablesData.tables && Array.isArray(tablesData.tables)) setLiveTables(tablesData.tables);
+        if (Array.isArray(tablesData.sections)) setLiveSections(tablesData.sections);
       }
 
-      if (tablesRes && tablesRes.ok) {
-        const data = await tablesRes.json();
-        if (data.uninitialized) setHubMenuUninitialized(true);
-        if (data.tables && Array.isArray(data.tables)) setLiveTables(data.tables);
-        if (Array.isArray(data.sections)) setLiveSections(data.sections);
-      }
-
-      if (ordersRes && ordersRes.ok) {
-        const data = await ordersRes.json();
-        if (data.tickets && Array.isArray(data.tickets)) setActiveOrders(data.tickets);
+      if (ordersData && ordersData.tickets && Array.isArray(ordersData.tickets)) {
+        setActiveOrders(ordersData.tickets);
+        countedOrdersRef.current = new Set(ordersData.tickets.map(orderKey));   // what the read says is already in the totals
       }
     } catch (err) {
       console.warn('Could not fetch live state from hub:', err);
@@ -138,6 +158,17 @@ export const WaiterApp = () => {
         setHubInfo(data);
         pingFailuresRef.current = 0; // Reset fail counter on success
         
+        // A tablet that was set up as a kitchen screen holds a token the hub honours for tickets and
+        // nothing else, and shares this browser's storage. It is not an enrolled handset: say so, and let
+        // the code entry below replace the token, rather than carrying on to a sign-in the hub refuses.
+        if (data.device_scope === 'kitchen') {
+          setIsEnrolled(false);
+          setConnStatus('unauthorized');
+          wasConnectedRef.current = false;
+          setIsTestingConn(false);
+          return false;
+        }
+
         // If data.authorised is false (hub requires enrollment from this handset)
         if (data.authorised === false && !hasToken()) {
           setIsEnrolled(false);
@@ -227,6 +258,11 @@ export const WaiterApp = () => {
           return o;
         }));
       }
+    } else if (type === 'TICKET_CANCELLED') {
+      // The order is gone; which tables are still busy is the hub's to say, so read them again.
+      const gone = payload.ticket_id || payload.ticket?.id;
+      if (gone) setActiveOrders(prev => prev.filter(o => o.id !== gone));
+      fetchLiveState(cleanUrl);
     } else if (type === 'CLEAR_TABLE' || type === 'bill_cleared' || type === 'order_cleared') {
       const tableId = payload.table_id;
       if (tableId) {
@@ -237,9 +273,11 @@ export const WaiterApp = () => {
     } else if (type === 'NEW_ORDER' || type === 'order_created') {
       const ticket = payload.ticket || payload;
       if (ticket && ticket.table_id) {
+        const alreadyCounted = countedOrdersRef.current.has(orderKey(ticket));
+        countedOrdersRef.current.add(orderKey(ticket));
         setLiveTables(prev => prev.map(t => {
           if (String(t.id) === String(ticket.table_id)) {
-            return { ...t, status: t.status === 'ready' ? 'ready' : 'kot', activeOrderTotal: (t.activeOrderTotal || 0) + (Number(ticket.total_amount) || 0) };
+            return { ...t, status: t.status === 'ready' ? 'ready' : 'kot', activeOrderTotal: (t.activeOrderTotal || 0) + (alreadyCounted ? 0 : Number(ticket.total_amount) || 0) };
           }
           return t;
         }));
@@ -262,6 +300,9 @@ export const WaiterApp = () => {
     let isSubscribed = true;
 
     const connectWs = () => {
+      // A reconnect timer set before this effect was cleaned up (the app went away, or the hub's address changed)
+      // still fires. It must not open a socket that nothing will ever close.
+      if (!isSubscribed) return;
       try {
         const finalWsUrl = authWsUrl(wsUrl);
         ws = new WebSocket(finalWsUrl);
@@ -282,6 +323,56 @@ export const WaiterApp = () => {
     connectWs();
     return () => { isSubscribed = false; if (ws) ws.close(); };
   }, [hubUrl, fetchLiveState, handleHubWsEvent]);
+
+  // Courses held for the selected table (served in courses): which tickets, and what is still on hold.
+  const [firingId, setFiringId] = useState(null);
+  const [fireError, setFireError] = useState('');
+  const heldForTable = selectedTableId
+    ? activeOrders
+        .filter(t => String(t.table_id) === String(selectedTableId))
+        .map(t => ({ ticket: t, held: heldGroups(t) }))
+        .filter(x => x.held.length > 0)
+    : [];
+
+  const fireNextCourse = async (ticket) => {
+    if (!hubUrl) return;
+    const cleanUrl = hubUrl.replace(/\/+$/, '');
+    setFireError('');
+    setFiringId(ticket.id);
+    try {
+      const res = await authFetch(`${cleanUrl}/orders/${encodeURIComponent(ticket.id)}/fire`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setFireError(data.error || 'Could not fire the next course.');
+      }
+      fetchLiveState(cleanUrl);
+    } catch {
+      setFireError(`Hub unreachable at ${cleanUrl}. Check WiFi network.`);
+    } finally {
+      setFiringId(null);
+    }
+  };
+
+  // The selected table's orders that are still on the board, for the cancel block under the floor grid.
+  const sentForTable = selectedTableId ? activeOrders.filter(t => String(t.table_id) === String(selectedTableId)) : [];
+
+  const cancelOrder = async (ticket, reason) => {
+    const cleanUrl = hubUrl.replace(/\/+$/, '');
+    try {
+      const res = await authFetch(`${cleanUrl}/orders/${encodeURIComponent(ticket.id)}/cancel`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason, by: waiterSession?.name })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, error: data.error || 'Could not cancel that order.' };
+      setActiveOrders(prev => prev.filter(o => o.id !== ticket.id));
+      fetchLiveState(cleanUrl);
+      return { ok: true, message: cancelledMessage(ticket, data) };
+    } catch {
+      return { ok: false, error: `Hub unreachable at ${cleanUrl}. Check WiFi network.` };
+    }
+  };
 
   const handleClearTableBill = async (tableId) => {
     // 1. Clear draft for table
@@ -738,6 +829,24 @@ export const WaiterApp = () => {
                 connStatus={connStatus}
                 isEnrolled={isEnrolled}
               />
+              {/* Courses held for the selected table: the waiter sends the next one when the guests are ready. */}
+              {heldForTable.length > 0 && (
+                <div className="flex flex-col gap-2 rounded-[var(--radius-sm)] border px-3 py-2.5" style={{ borderColor: 'var(--status-blue-border)', background: 'var(--status-blue-bg)' }}>
+                  {heldForTable.map(({ ticket, held }) => (
+                    <div key={ticket.id} className="flex items-center justify-between gap-2">
+                      <span className="text-xs" style={{ color: 'var(--status-blue-text)' }}>
+                        <strong>{ticket.table_name || 'Table'} · #{ticket.ticket_number}</strong>
+                        {' '}on hold: {held.map(h => `course ${h.course} (${h.count})`).join(', ')}
+                      </span>
+                      <Button size="sm" className="h-9 shrink-0" disabled={firingId === ticket.id} onClick={() => fireNextCourse(ticket)}>
+                        Fire course {held[0].course}
+                      </Button>
+                    </div>
+                  ))}
+                  {fireError && <span className="text-xs" style={{ color: 'var(--color-error-text)' }}>{fireError}</span>}
+                </div>
+              )}
+              <SentOrders tickets={sentForTable} onCancel={cancelOrder} />
               <OrderDraftDrawer
                 selectedTableId={selectedTableId} draftItems={currentDraftItems}
                 onRemoveItem={removeItem} onClearDraft={clearDraft}

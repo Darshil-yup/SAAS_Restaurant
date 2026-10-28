@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Armchair, ArrowDown, ArrowUp, Lock, Minus, Plus, Trash2 } from 'lucide-react';
+import { Armchair, ArrowDown, ArrowUp, Lock, Minus, Plus, QrCode, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
+import { cn } from 'cn';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import { explainError, hubSend } from './api';
+import { explainError, hubBase, hubSend } from './api';
 import { ConfirmDialog, EmptyState, ListSkeleton, NativeSelect, Notice, TextInput, useLastValue } from './ui';
+import { GuestOrderingSwitch } from './GuestOrderingSwitch';
 import {
   addSection, addTable, deleteSection, deleteTable, draftFromLayout, isDirty, moveSection, moveTableToSection,
   moveTableWithin, orderedTables, renameSection, renameTable, setCapacity, tablesIn, toPayload, validateDraft
@@ -198,8 +200,26 @@ export function TablesTab({ layout, live, error, onRetry, onReload, onRefreshLiv
         <p className="text-sm text-muted-foreground">
           {tableCount} {tableCount === 1 ? 'table' : 'tables'} in {draft.sections.length} {draft.sections.length === 1 ? 'section' : 'sections'}. Changes are saved when you press Save layout.
         </p>
-        <Button type="button" variant="outline" className="h-10" onClick={() => edit(d => addSection(d))} disabled={saving}><Plus aria-hidden="true" /> Add section</Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Opens the printable sheet of diner QR codes, one per table. A new tab rather than
+              an in-page view: its job is to be printed, and it is served by the hub. */}
+          {tableCount > 0 && (
+            <a
+              href={`${hubBase()}/qr/diner/sheet`}
+              target="_blank"
+              rel="noreferrer"
+              className={cn(buttonVariants({ variant: 'outline' }), 'h-10')}
+            >
+              <QrCode aria-hidden="true" /> Table QR codes
+            </a>
+          )}
+          <Button type="button" variant="outline" className="h-10" onClick={() => edit(d => addSection(d))} disabled={saving}><Plus aria-hidden="true" /> Add section</Button>
+        </div>
       </div>
+
+      {/* Beside the codes it is about: the switch that decides whether scanning one can send a
+          ticket to the kitchen, rather than only show the menu. */}
+      {tableCount > 0 && <GuestOrderingSwitch notify={notify} />}
 
       {draft.sections.length === 0 ? (
         <EmptyState

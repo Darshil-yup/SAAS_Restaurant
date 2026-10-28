@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { supabase, checkSupabaseConnection } from './supabaseClient.js';
 import { normalizeCloudMenuItem } from './menuNormalize.js';
 import { tablesFromCloud } from './catalogSync.js';
+import { applyPlanToMenuItems } from './plans.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,16 +46,16 @@ const DEFAULT_MENU_ITEMS = [
   // Modifier groups and variants stack: Chicken Tikka Masala (Full) + Extra
   // Cheese = 340 + 40 = ₹380/unit.
   {
-    id: 'm1', name: 'Paneer Butter Masala', category: 'Main Course', isVeg: true, available: true,
+    id: 'm1', name: 'Paneer Butter Masala', category: 'Main Course', isVeg: true, available: true, course: 2,
     price: 280,
     variants: [
       { id: 'v_half', label: 'Half', price: 180 },
       { id: 'v_full', label: 'Full', price: 280 }
     ]
   },
-  { id: 'm2', name: 'Dal Tadka', price: 190, category: 'Main Course', isVeg: true, available: true },
+  { id: 'm2', name: 'Dal Tadka', price: 190, category: 'Main Course', isVeg: true, available: true, course: 2 },
   {
-    id: 'm3', name: 'Chicken Tikka Masala', category: 'Main Course', isVeg: false, available: true,
+    id: 'm3', name: 'Chicken Tikka Masala', category: 'Main Course', isVeg: false, available: true, course: 2,
     price: 340,
     variants: [
       { id: 'v_half', label: 'Half', price: 220 },
@@ -83,7 +84,7 @@ const DEFAULT_MENU_ITEMS = [
     ]
   },
   {
-    id: 'm4', name: 'Butter Naan', price: 45, category: 'Breads & Rice', isVeg: true, available: true,
+    id: 'm4', name: 'Butter Naan', price: 45, category: 'Breads & Rice', isVeg: true, available: true, course: 2,
     // Day-part pricing (M2 · PR 13): breakfast promotion drops naan to ₹35
     // between 07:00 and 11:00 every day. Legacy items with no `day_parts`
     // behave exactly as before — the pricer just resolves to the base price.
@@ -96,16 +97,16 @@ const DEFAULT_MENU_ITEMS = [
     ]
   },
   {
-    id: 'm5', name: 'Jeera Rice', category: 'Breads & Rice', isVeg: true, available: true,
+    id: 'm5', name: 'Jeera Rice', category: 'Breads & Rice', isVeg: true, available: true, course: 2,
     price: 140,
     variants: [
       { id: 'v_half', label: 'Half', price: 90 },
       { id: 'v_full', label: 'Full', price: 140 }
     ]
   },
-  { id: 'm6', name: 'Veg Crispy', price: 220, category: 'Starters', isVeg: true, available: true },
+  { id: 'm6', name: 'Veg Crispy', price: 220, category: 'Starters', isVeg: true, available: true, course: 1 },
   {
-    id: 'm7', name: 'Chicken 65', category: 'Starters', isVeg: false, available: true,
+    id: 'm7', name: 'Chicken 65', category: 'Starters', isVeg: false, available: true, course: 1,
     price: 290,
     variants: [
       // Boneless is temporarily 86'd (M2 · PR 14 demo). Reception sees the
@@ -117,10 +118,10 @@ const DEFAULT_MENU_ITEMS = [
   },
   // Cold-line item: desserts fire to a separate KOT so the pastry
   // station doesn't share a printer queue with the hot line (M2 · PR 15).
-  { id: 'm8', name: 'Gulab Jamun (2 pcs)', price: 90, category: 'Desserts', isVeg: true, available: true, station: 'cold' },
+  { id: 'm8', name: 'Gulab Jamun (2 pcs)', price: 90, category: 'Desserts', isVeg: true, available: true, course: 3, station: 'cold' },
   {
     // Bar-line item: beverages fire to the bar station's KOT/KDS view.
-    id: 'm9', name: 'Masala Chaas', price: 50, category: 'Beverages', isVeg: true, available: true, station: 'bar',
+    id: 'm9', name: 'Masala Chaas', price: 50, category: 'Beverages', isVeg: true, available: true, course: 1, station: 'bar',
     modifier_groups: [
       {
         id: 'mg_sweet', label: 'Sweetness', min: 1, max: 1,
@@ -168,6 +169,21 @@ class RestaurantCache {
     this.realtimeChannel = null;
     this._writeChain = Promise.resolve();
     this._backupSeq = 0;
+    // Returns the effective plan's feature flags (see lib/plans.js). Wired by
+    // server.js; the default grants everything so unit tests and tools that
+    // use the cache standalone see the full menu.
+    this.featureProvider = () => null;
+    // Flags dishes that cannot be made from the stock on hand (lib/inventory.js). Wired by server.js;
+    // the default leaves the menu as it is, so the cache used standalone sees no stock at all.
+    this.stockProvider = items => items;
+  }
+
+  setFeatureProvider(fn) {
+    this.featureProvider = typeof fn === 'function' ? fn : () => null;
+  }
+
+  setStockProvider(fn) {
+    this.stockProvider = typeof fn === 'function' ? fn : items => items;
   }
 
   loadFromDisk() {
@@ -252,7 +268,8 @@ class RestaurantCache {
   }
 
   async _applyCatalogUpdate(kind, baseRevision, mutator) {
-    const current = kind === 'menu' ? this.getMenuCache() : this.getTablesCache();
+    // The stored menu, never the shown one (see getStoredMenu): saving must not write overlays.
+    const current = kind === 'menu' ? this.getStoredMenu() : this.getTablesCache();
     if (current.uninitialized) {
       return failure(409, 'HUB_UNINITIALIZED', 'No catalog yet — connect this hub to the internet once to complete setup.');
     }
@@ -540,6 +557,20 @@ class RestaurantCache {
     }
   }
 
+  /**
+   * The menu as STORED, with no overlay of any kind. This is what an edit must start from.
+   *
+   * `getMenuCache` is the menu as SHOWN: the plan hides fields a tenant's plan does not include,
+   * and stock flags what cannot be made. An edit that began from the shown menu would write those
+   * overlays into the stored one when it saved. A tenant downgraded to Starter would lose every
+   * modifier, day-part price and station the first time they corrected a typo, and a stock-out
+   * would become a permanent 86. So reads get the overlays and writes never do.
+   */
+  getStoredMenu(restaurantId) {
+    if (this.isUninitialized || !this.menuCache) return this.getMenuCache(restaurantId);
+    return { ...this.menuCache, revision: this.menuCache.revision || 0, uninitialized: false };
+  }
+
   getMenuCache(restaurantId) {
     if (this.isUninitialized || !this.menuCache) {
       return {
@@ -552,9 +583,21 @@ class RestaurantCache {
         items: []
       };
     }
+    // Plan gating (M3 · PR 16): fields the tenant's plan doesn't include are
+    // stripped here, at the single read point shared by GET /menu and the
+    // order pricer, so handsets and billing always agree on what's sellable.
+    const features = this.featureProvider();
+    const planned = features
+      ? applyPlanToMenuItems(this.menuCache.items, features)
+      : this.menuCache.items;
+    // Stock-out (inventory): a `stock_out` flag layered over the menu, never a write to it, so the
+    // editor never sees it as a hand 86 and restocking undoes it. Same single read point as the plan,
+    // so the handset grid, the diner menu and the order check all agree on what can be made.
+    const items = this.stockProvider(planned, restaurantId);
     return {
       ...this.menuCache,
       revision: this.menuCache.revision || 0,
+      ...(items !== this.menuCache.items ? { items } : {}),
       uninitialized: false
     };
   }

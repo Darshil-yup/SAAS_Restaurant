@@ -29,11 +29,16 @@ function Section({ title, description, error, children }) {
   );
 }
 
+// The switch is named by its wrapping label (the Switch wires aria-labelledby to it, which wins over any
+// aria-label), so `label` goes INTO the label. It used to be an aria-label that was ignored, which made
+// every variant and option read "Available, switch". The visible "Available" / "86'd" is the state, which
+// aria-checked already says, so it is hidden from the name rather than repeated in it.
 function AvailableSwitch({ checked, onChange, label }) {
   return (
     <label className="inline-flex h-10 shrink-0 cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-      <Switch checked={checked} onCheckedChange={onChange} aria-label={label} />
-      <span className="w-14">{checked ? 'Available' : '86’d'}</span>
+      <Switch checked={checked} onCheckedChange={onChange} />
+      <span className="sr-only">{label}</span>
+      <span className="w-14" aria-hidden="true">{checked ? 'Available' : '86’d'}</span>
     </label>
   );
 }
@@ -223,6 +228,17 @@ export function ItemEditor({ item, menu, defaultCategory, onClose, onSaved, onSt
                 <option value="hot">Hot kitchen</option>
                 <option value="cold">Cold line</option>
                 <option value="bar">Bar</option>
+              </NativeSelect>
+            </Field>
+
+            <Field label="Serving course" htmlFor="item-course" error={err('course')} hint="Used when a waiter serves an order in courses: 1 starters, 2 mains, 3 desserts.">
+              <NativeSelect id="item-course" value={form.course} onChange={e => edit({ course: e.target.value })}>
+                {initial.course === '' && <option value="">Default (course 1)</option>}
+                <option value="1">Course 1: starters</option>
+                <option value="2">Course 2: mains</option>
+                <option value="3">Course 3: desserts</option>
+                <option value="4">Course 4</option>
+                <option value="5">Course 5</option>
               </NativeSelect>
             </Field>
 

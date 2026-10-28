@@ -278,6 +278,14 @@ export function MenuTab({ menu, error, onRetry, onReload, onStale, notify }) {
                             {variants > 0 && <Badge variant="outline">{variants} {variants === 1 ? 'variant' : 'variants'}</Badge>}
                             {modifiers > 0 && <Badge variant="outline">{modifiers} {modifiers === 1 ? 'modifier group' : 'modifier groups'}</Badge>}
                             {dayParts > 0 && <Badge variant="outline">{dayParts} day-part {dayParts === 1 ? 'price' : 'prices'}</Badge>}
+                            {/* Set by the hub from stock, not by a switch here: it clears itself on a delivery. */}
+                            {item.stock_out && (
+                              <Badge
+                                variant="outline"
+                                title="The kitchen has run out of something this needs. It comes back by itself when stock is recorded."
+                                style={{ background: 'var(--status-rust-bg)', color: 'var(--status-rust-text)', borderColor: 'var(--status-rust-border)' }}
+                              >Out of stock</Badge>
+                            )}
                           </div>
                         </TableCell>
                         <TableCell className="text-right tabular-nums">{priceLabel(item)}</TableCell>
@@ -285,7 +293,11 @@ export function MenuTab({ menu, error, onRetry, onReload, onStale, notify }) {
                         <TableCell className="hidden capitalize md:table-cell">{item.station || <span className="text-muted-foreground">hot</span>}</TableCell>
                         <TableCell onClick={event => event.stopPropagation()}>
                           <label className="inline-flex h-10 cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-                            <Switch checked={available} disabled={busy} onCheckedChange={() => toggleAvailable(item)} aria-label={`${item.name}: ${available ? 'available' : '86’d'}`} />
+                            {/* The switch is named by this label (the Switch wires aria-labelledby to it, which wins over any
+                                aria-label), so the label has to say WHICH dish. Without the hidden name every row read
+                                "Available, switch" and a screen reader could not tell them apart. */}
+                            <Switch checked={available} disabled={busy} onCheckedChange={() => toggleAvailable(item)} />
+                            <span className="sr-only">{item.name}: </span>
                             <span className="w-14">{available ? 'Available' : '86’d'}</span>
                           </label>
                         </TableCell>

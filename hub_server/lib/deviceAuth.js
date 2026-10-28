@@ -18,6 +18,21 @@ import { hubConfig } from './hubConfig.js';
  * displayed on the physical KDS screen. Serving it would defeat the purpose.
  */
 
+// What a device may do (§4.7). 'full' is every enrolled handset's authority today: take orders, raise and
+// void bills. 'kitchen' is a screen that lives at the pass -- a tablet cooks and dishwashers handle -- and
+// may only see the tickets and mark them done.
+//
+// A grant with NO scope is 'full': every device enrolled before this existed had that authority, and
+// narrowing it silently would stop a waiter's phone mid-service. A grant whose scope is present but
+// unrecognised -- a hand-edited file, a value from a newer hub -- is read as 'kitchen', the narrower of
+// the two: when the file cannot be understood, the safe reading is the one that can do less.
+export const DEVICE_SCOPES = ['full', 'kitchen'];
+const scopeOf = device => {
+  const scope = device?.scope;
+  if (scope === undefined || scope === null) return 'full';
+  return scope === 'full' ? 'full' : 'kitchen';
+};
+
 const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const ENROLL_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no I/L/O/0/1
 const MAX_ATTEMPTS = 5;
@@ -28,6 +43,13 @@ function generateEnrollmentCode() {
   const bytes = crypto.randomBytes(6);
   return Array.from(bytes, b => ENROLL_ALPHABET[b % ENROLL_ALPHABET.length]).join('');
 }
+
+/**
+ * How a device is named in the API. Grants issued before ids existed fall back to a prefix of
+ * their token hash: it is already stored, it is stable, and a 16-hex-character prefix identifies
+ * one grant among at most 50 without being enough to reconstruct the token.
+ */
+const deviceId = device => device?.id || `legacy_${String(device?.token_hash || '').slice(0, 16)}`;
 
 /** Constant-time compare that tolerates length differences without leaking them. */
 function safeEqual(a, b) {
@@ -62,6 +84,58 @@ class DeviceAuth {
     return hubConfig.getPairingInfo().devices || [];
   }
 
+  /**
+   * The enrolled devices as reception may see them: never the token hash, which is the only
+   * secret here. `id` identifies one device for revocation.
+   *
+   * Devices enrolled before ids existed get one derived from their token hash, which is stable
+   * for the life of the grant -- so an old handset can still be revoked without re-enrolling
+   * every device in the restaurant first.
+   */
+  listDevicesPublic(now = new Date()) {
+    return this.listDevices().map(d => ({
+      id: deviceId(d),
+      label: d.label || 'Device',
+      scope: scopeOf(d),
+      issued_at: d.issued_at ?? null,
+      expires_at: d.expires_at ?? null,
+      expired: new Date(d.expires_at).getTime() <= now.getTime()
+    }));
+  }
+
+  /**
+   * Revoke one device. The handset is refused on its very next request -- there is no session to
+   * expire -- so this is what reception reaches for when a phone is lost or someone leaves.
+   *
+   * Rotating the enrollment code also revokes every device, which is the right answer when a code
+   * has been shared around and the wrong one when a single phone is missing: it makes every other
+   * handset in the restaurant re-enrol mid-service.
+   */
+  revokeDevice(id) {
+    const cfg = hubConfig.getPairingInfo();
+    const devices = cfg.devices || [];
+    const match = devices.find(d => deviceId(d) === String(id));
+    if (!match) return { ok: false, code: 'NOT_FOUND', error: 'That device is not enrolled on this hub.' };
+
+    hubConfig.saveConfig({ ...cfg, devices: devices.filter(d => d !== match) });
+    return { ok: true, device: { id: deviceId(match), label: match.label || 'Device' } };
+  }
+
+  /**
+   * Drop every grant that has already expired. Housekeeping, not a security action: an expired
+   * token is already refused: this only stops reception reading a list of ghosts.
+   *
+   * Deliberately not prunedDevices(), which also caps the roster because it runs while ADDING one.
+   */
+  pruneExpiredDevices(now = new Date()) {
+    const cfg = hubConfig.getPairingInfo();
+    const devices = cfg.devices || [];
+    const kept = devices.filter(d => new Date(d.expires_at).getTime() > now.getTime());
+    if (kept.length === devices.length) return { removed: 0 };
+    hubConfig.saveConfig({ ...cfg, devices: kept });
+    return { removed: devices.length - kept.length };
+  }
+
   isRateLimited(ip) {
     const rec = this.failedAttempts.get(ip);
     if (!rec) return false;
@@ -81,8 +155,21 @@ class DeviceAuth {
     }
   }
 
-  /** Exchange the KDS-displayed enrollment code for a bearer token. */
-  enroll(code, deviceLabel, ip) {
+  /** Devices whose token is still valid (expired tokens don't count toward plan limits). */
+  activeDeviceCount() {
+    const now = Date.now();
+    return this.listDevices().filter(d => new Date(d.expires_at).getTime() > now).length;
+  }
+
+  /**
+   * Exchange the KDS-displayed enrollment code for a bearer token.
+   *
+   * `guard` (optional) runs only AFTER the code has been verified and returns
+   * `{ ok: true }` or a refusal `{ ok: false, status, error, ...extra }`. It is
+   * used for plan limits: checking before the code would let an unauthenticated
+   * caller probe the tenant's plan.
+   */
+  enroll(code, deviceLabel, ip, guard, scope = 'full') {
     if (this.isRateLimited(ip)) {
       return { ok: false, status: 429, error: 'Too many failed attempts. Wait a minute and try again.' };
     }
@@ -96,17 +183,27 @@ class DeviceAuth {
     }
 
     this.failedAttempts.delete(ip);
-    return { ok: true, ...this.issueToken(deviceLabel) };
+    if (typeof guard === 'function') {
+      const verdict = guard();
+      if (verdict && verdict.ok === false) return verdict;
+    }
+    return { ok: true, ...this.issueToken(deviceLabel, scope) };
   }
 
-  issueToken(deviceLabel = 'Handset') {
+  issueToken(deviceLabel = 'Handset', scope = 'full') {
+    // Strict here even though the route checks too: a caller that misspells a scope must fail, not be
+    // quietly issued whichever authority the fallback happens to give.
+    if (!DEVICE_SCOPES.includes(scope)) throw new Error(`Unknown device scope: ${scope}`);
     const token = crypto.randomBytes(32).toString('hex');
     const cfg = hubConfig.getPairingInfo();
 
     const device = {
+      // Stable, and not derived from the secret, so it can be shown on a screen and put in a URL.
+      id: 'dev_' + crypto.randomBytes(5).toString('hex'),
       // Only a hash is persisted, so a leaked hub_config.json cannot be replayed.
       token_hash: crypto.createHash('sha256').update(token).digest('hex'),
       label: deviceLabel,
+      scope,
       issued_at: new Date().toISOString(),
       expires_at: new Date(Date.now() + TOKEN_TTL_MS).toISOString()
     };
@@ -127,15 +224,27 @@ class DeviceAuth {
       .slice(-(MAX_DEVICES - 1));
   }
 
-  verifyToken(token) {
-    if (!token || typeof token !== 'string') return false;
+  /** The live grant this token belongs to, or null. */
+  lookup(token) {
+    if (!token || typeof token !== 'string') return null;
     const hash = crypto.createHash('sha256').update(token).digest('hex');
     const devices = hubConfig.getPairingInfo().devices || [];
     const now = Date.now();
 
-    return devices.some(d =>
+    return devices.find(d =>
       d.token_hash === hash && new Date(d.expires_at).getTime() > now
-    );
+    ) ?? null;
+  }
+
+  /** Is this a live token of ANY scope. Reading the live feed needs no more than that. */
+  verifyToken(token) {
+    return this.lookup(token) !== null;
+  }
+
+  /** 'full' | 'kitchen' for a live token, null for anything else. */
+  scopeFor(token) {
+    const device = this.lookup(token);
+    return device ? scopeOf(device) : null;
   }
 }
 
@@ -169,15 +278,37 @@ export function extractToken(req) {
   return null;
 }
 
-/** Express middleware: allow the local KDS, otherwise require a valid bearer token. */
+const unauthorised = res => res.status(401).json({
+  error: 'Device not authorised. Scan the QR code on the Kitchen Display, or enter the enrollment code shown there.',
+  code: 'DEVICE_UNAUTHORISED'
+});
+
+/**
+ * Express middleware: allow the local KDS, otherwise require a valid bearer token of FULL scope.
+ *
+ * This is the default for every route, which is the point: a screen enrolled as 'kitchen' is refused
+ * by anything that has not been explicitly opened to it with `requireKitchenDevice`, so a route added
+ * next year is closed to a pass tablet until someone decides otherwise. The other way round -- a list
+ * of routes a kitchen token is kept OUT of -- fails open the first time someone forgets to add one.
+ */
 export function requireDevice(req, res, next) {
   if (isLoopback(req)) return next();
-  if (deviceAuth.verifyToken(extractToken(req))) return next();
+  const scope = deviceAuth.scopeFor(extractToken(req));
+  if (scope === 'full') return next();
+  if (scope === 'kitchen') {
+    return res.status(403).json({
+      error: 'This device is set up as a kitchen screen, which cannot do that. Enrol it as a handset to use it for orders and bills.',
+      code: 'DEVICE_SCOPE'
+    });
+  }
+  return unauthorised(res);
+}
 
-  return res.status(401).json({
-    error: 'Device not authorised. Scan the QR code on the Kitchen Display, or enter the enrollment code shown there.',
-    code: 'DEVICE_UNAUTHORISED'
-  });
+/** As requireDevice, but also admits a kitchen screen. Only the few routes a screen at the pass uses. */
+export function requireKitchenDevice(req, res, next) {
+  if (isLoopback(req)) return next();
+  if (deviceAuth.verifyToken(extractToken(req))) return next();
+  return unauthorised(res);
 }
 
 // The hostname a Host header value ("host[:port]") or an Origin value ("scheme://host[:port]")
@@ -220,6 +351,21 @@ export function isReceptionRequest(req) {
     (origin === undefined || isLocalHostname(hostnameOf(origin, { withScheme: true })));
 
   return isLoopback(req) && addressedToThisMachine;
+}
+
+/**
+ * Same decision as requireReception, with a message that names the action. Used for money and
+ * hardware screens (cash reconciliation, printer setup), which any enrolled handset must not reach.
+ */
+export function requireReceptionFor(what) {
+  return (req, res, next) => {
+    if (isReceptionRequest(req)) return next();
+    return res.status(403).json({
+      success: false,
+      error: `${what} is only available on the reception laptop.`,
+      code: 'RECEPTION_ONLY'
+    });
+  };
 }
 
 /** Express guard for the /admin JSON API: the same decision as isReceptionRequest, answered as 403 RECEPTION_ONLY. */
